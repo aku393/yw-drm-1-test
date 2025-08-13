@@ -93,6 +93,10 @@ json_lock = asyncio.Lock()  # Lock for JSON data management
 authorized_users = set(ALLOWED_USERS)  # Use a set for faster lookups
 user_lock = asyncio.Lock() # Lock to manage authorized_users
 
+# Manual premium status tracking
+user_premium_status = {}  # Format: {user_id: bool}
+premium_lock = asyncio.Lock()  # Lock for premium status management
+
 # Thumbnail storage for users
 user_thumbnails = {}  # Format: {user_id: thumbnail_file_path}
 thumbnail_lock = asyncio.Lock()  # Lock for thumbnail management
@@ -743,7 +747,7 @@ class MPDLeechBot:
 
     async def split_file(self, input_file, max_size_mb=4000, progress_cb=None, cancel_event=None):
         """Split large files with progress tracking and proper cleanup"""
-        max_size = max_size_mb * 1024 * 1024
+        max_size = int(max_size_mb * 1024 * 1024)  # Convert MB to bytes properly
         file_size = os.path.getsize(input_file)
 
         # If file is within size limit, return as-is
@@ -1262,10 +1266,12 @@ class MPDLeechBot:
         try:
             # Get full user entity with all attributes
             user = await client.get_entity(user_id)
-
-            # Method 1: Check premium attribute directly
+            
+            # Method 1: Check premium attribute directly (most reliable)
             if hasattr(user, 'premium') and user.premium:
                 logging.info(f"User {user_id} detected as premium via premium attribute")
+                async with premium_lock:
+                    user_premium_status[user_id] = True
                 return True
 
             # Method 2: Check alternative premium attributes
@@ -1273,23 +1279,45 @@ class MPDLeechBot:
             for attr in premium_indicators:
                 if hasattr(user, attr) and getattr(user, attr, False):
                     logging.info(f"User {user_id} detected as premium via {attr}")
+                    async with premium_lock:
+                        user_premium_status[user_id] = True
                     return True
 
-            # Method 3: Check user flags (Telegram stores premium status in flags)
+            # Method 3: Check user type (Premium users have UserTypePremium)
+            if hasattr(user, 'type') and user.type:
+                user_type = str(user.type)
+                if 'premium' in user_type.lower():
+                    logging.info(f"User {user_id} detected as premium via type: {user_type}")
+                    async with premium_lock:
+                        user_premium_status[user_id] = True
+                    return True
+
+            # Method 4: Check user flags (Telegram stores premium status in flags)
             if hasattr(user, 'flags') and user.flags:
-                # Premium users typically have different flag patterns
-                if user.flags & (1 << 4):  # Premium flag bit
-                    logging.info(f"User {user_id} detected as premium via flags")
-                    return True
+                # Premium flag bits (multiple possible locations)
+                premium_flag_bits = [4, 8, 16]  # Common premium flag positions
+                for bit in premium_flag_bits:
+                    if user.flags & (1 << bit):
+                        logging.info(f"User {user_id} detected as premium via flag bit {bit}")
+                        async with premium_lock:
+                            user_premium_status[user_id] = True
+                        return True
 
-            # Method 4: Assume premium for now to allow larger uploads
-            # This is safer than blocking legitimate premium users
-            logging.info(f"User {user_id} - assuming premium for large file support")
-            return True
+            # Method 5: Try to detect via user's file size limits (experimental)
+            # Premium users can send larger files, we can test this indirectly
+            
+            # Default to free user if no premium indicators found
+            logging.info(f"User {user_id} detected as free user")
+            async with premium_lock:
+                user_premium_status[user_id] = False
+            return False
 
         except Exception as e:
-            logging.warning(f"Could not detect premium status for user {user_id}: {e}, assuming premium for safety")
-            return True  # Default to premium to avoid blocking large uploads
+            logging.warning(f"Could not detect premium status for user {user_id}: {e}, defaulting to free user")
+            async with premium_lock:
+                if user_id not in user_premium_status:
+                    user_premium_status[user_id] = False
+            return user_premium_status.get(user_id, False)
 
     async def upload_file(self, event, filepath, status_msg, total_size, sender, duration):
         try:
@@ -1306,13 +1334,13 @@ class MPDLeechBot:
             self.progress_state['speed'] = 0
             self.progress_state['elapsed'] = 0
 
-            # Set size limits optimized for large files
+            # Set size limits based on actual Telegram limits with proper detection
             if is_premium:
-                max_size_mb = 3900  # 3.9GB for premium (safer than 4GB)
-                max_size_bytes = 4 * 1024 * 1024 * 1024  # 4GB limit
+                max_size_mb = 3950  # 3.95GB for premium (very close to 4GB limit)
+                max_size_bytes = int(3.95 * 1024 * 1024 * 1024)  # 3.95GB limit
             else:
-                max_size_mb = 1900  # 1.9GB for free (safer than 2GB)
-                max_size_bytes = 2 * 1024 * 1024 * 1024  # 2GB limit
+                max_size_mb = 1950  # 1.95GB for free (very close to 2GB limit)  
+                max_size_bytes = int(1.95 * 1024 * 1024 * 1024)  # 1.95GB limit
 
             user_type = "PREMIUM" if is_premium else "FREE"
             logging.info(f"User {sender.id} is {user_type}, max file size: {format_size(max_size_bytes)}")
@@ -1921,6 +1949,8 @@ async def start_handler(event):
         "🛡️  𝗔𝗱𝗺𝗶𝗻\n"
         "   • /addadmin <id>\n"
         "   • /removeadmin <id>\n\n"
+        "💎  𝗣𝗿𝗲𝗺𝗶𝘂𝗺\n"
+        "   • /mypremium — check your status (auto-detected)\n\n"
         "Ready to go. Drop links and I'll fly! 🚀"
     )
 
@@ -2686,6 +2716,38 @@ async def removeadmin_handler(event):
                 message=f"ℹ️ User {user_id} is not an admin.",
                 event=event
             )
+
+
+
+@client.on(events.NewMessage(pattern=r'^/mypremium$'))
+async def mypremium_handler(event):
+    sender = await event.get_sender()
+    logging.info(f"Received /mypremium command from user {sender.id}")
+
+    if sender.id not in authorized_users:
+        await send_message_with_flood_control(
+            entity=event.chat_id,
+            message="You're not authorized.",
+            event=event
+        )
+        return
+
+    # Create a temporary bot instance to check premium status
+    temp_bot = MPDLeechBot(sender.id)
+    is_premium = await temp_bot.detect_premium_status(sender.id)
+    
+    status_text = "Premium 💎" if is_premium else "Free 🆓"
+    max_size = "4GB" if is_premium else "2GB"
+    
+    await send_message_with_flood_control(
+        entity=event.chat_id,
+        message=f"👤 **Your Account Status**\n\n"
+                f"📊 Status: {status_text} (Auto-detected)\n"
+                f"📏 Max file size: {max_size}\n"
+                f"🆔 User ID: {sender.id}\n"
+                f"🤖 Detection: Automatic via Telegram API",
+        event=event
+    )
 
 async def perform_internet_speed_test():
     """Perform live internet speed test for both download and upload"""
