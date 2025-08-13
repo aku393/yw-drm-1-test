@@ -795,42 +795,54 @@ class MPDLeechBot:
         # Smart splitting based on file size and user type
         file_size_gb = file_size / (1024 * 1024 * 1024)
         
+        # Telegram upload limits: max 3000 parts per file, max 1MB per part
+        # This means absolute max file size per chunk is 3000 * 1MB = ~2.93GB
+        telegram_max_chunk_size = 3000 * 1048576  # ~2.93GB
+        
         # Determine optimal chunk sizes based on file size and max limit
         if max_size_mb >= 3950:  # Premium user
+            # Use smaller chunks to ensure they can be uploaded to Telegram
+            safe_premium_size = min(max_size, telegram_max_chunk_size)
             if file_size_gb >= 7.0:
-                # For 7GB+ files, split into 3.9GB and remaining parts
-                chunk_sizes = [int(3.9 * 1024 * 1024 * 1024)]  # 3.9GB first chunk
-                remaining = file_size - chunk_sizes[0]
-                while remaining > 0:
-                    if remaining > int(3.9 * 1024 * 1024 * 1024):
-                        chunk_sizes.append(int(3.9 * 1024 * 1024 * 1024))
-                    else:
-                        chunk_sizes.append(remaining)
-                    remaining -= chunk_sizes[-1]
+                # For 7GB+ files, split into safe chunks (2.9GB max)
+                safe_chunk_size = int(2.9 * 1024 * 1024 * 1024)  # 2.9GB chunks
+                num_chunks = int((file_size + safe_chunk_size - 1) / safe_chunk_size)
+                chunk_sizes = [safe_chunk_size] * (num_chunks - 1)
+                # Last chunk gets the remainder
+                remainder = file_size - (safe_chunk_size * (num_chunks - 1))
+                chunk_sizes.append(remainder)
             else:
-                # For smaller files, use equal splitting
-                num_chunks = max(1, int((file_size + max_size - 1) / max_size))
+                # For smaller files, use equal splitting with safe size
+                num_chunks = max(1, int((file_size + safe_premium_size - 1) / safe_premium_size))
                 target_chunk_size = file_size // num_chunks
                 chunk_sizes = [target_chunk_size] * num_chunks
                 # Adjust last chunk for remainder
                 remainder = file_size - (target_chunk_size * (num_chunks - 1))
                 chunk_sizes[-1] = remainder
         else:  # Free user
-            if file_size_gb >= 3.8:  # For files 3.8GB+, split into 1.95GB chunks
-                chunk_size_195 = int(1.95 * 1024 * 1024 * 1024)  # 1.95GB
-                num_chunks = int((file_size + chunk_size_195 - 1) / chunk_size_195)
-                chunk_sizes = [chunk_size_195] * (num_chunks - 1)
+            # Use smaller chunks for free users to ensure uploadability
+            safe_free_size = min(max_size, telegram_max_chunk_size)
+            if file_size_gb >= 3.8:  # For files 3.8GB+, split into safe chunks
+                safe_chunk_size = int(1.9 * 1024 * 1024 * 1024)  # 1.9GB chunks (safe for upload)
+                num_chunks = int((file_size + safe_chunk_size - 1) / safe_chunk_size)
+                chunk_sizes = [safe_chunk_size] * (num_chunks - 1)
                 # Last chunk gets the remainder
-                remainder = file_size - (chunk_size_195 * (num_chunks - 1))
+                remainder = file_size - (safe_chunk_size * (num_chunks - 1))
                 chunk_sizes.append(remainder)
             else:
-                # For smaller files, use equal splitting
-                num_chunks = max(1, int((file_size + max_size - 1) / max_size))
+                # For smaller files, use equal splitting with safe size
+                num_chunks = max(1, int((file_size + safe_free_size - 1) / safe_free_size))
                 target_chunk_size = file_size // num_chunks
                 chunk_sizes = [target_chunk_size] * num_chunks
                 # Adjust last chunk for remainder
                 remainder = file_size - (target_chunk_size * (num_chunks - 1))
                 chunk_sizes[-1] = remainder
+        
+        # Final validation: ensure no chunk exceeds Telegram's upload limit
+        for i, size in enumerate(chunk_sizes):
+            if size > telegram_max_chunk_size:
+                logging.error(f"Chunk {i+1} size {format_size(size)} exceeds Telegram limit {format_size(telegram_max_chunk_size)}")
+                raise ValueError(f"Chunk {i+1} is too large for Telegram upload")
 
         num_chunks = len(chunk_sizes)
 
@@ -1481,17 +1493,40 @@ class MPDLeechBot:
 
                     # Custom parallel upload for each chunk with optimized settings
                     file_id = random.getrandbits(63)  # Generate a 63-bit file ID (0 to 2^63 - 1)
-                    part_size = 524288  # Exactly 512 KB (524288 bytes) - Telegram requirement
+                    
+                    # Calculate optimal part size to stay within Telegram's limits
+                    # Telegram allows max 3000 parts per file, and each part can be 512KB to 1MB
+                    max_parts = 3000
+                    min_part_size = 524288  # 512 KB minimum
+                    max_part_size = 1048576  # 1 MB maximum
+                    
+                    # Calculate required part size to fit within max parts limit
+                    required_part_size = (chunk_size + max_parts - 1) // max_parts
+                    
+                    # Choose part size that satisfies both Telegram's constraints and our needs
+                    if required_part_size <= min_part_size:
+                        part_size = min_part_size
+                    elif required_part_size <= max_part_size:
+                        # Round up to nearest 64KB for efficiency
+                        part_size = ((required_part_size + 65535) // 65536) * 65536
+                        part_size = min(part_size, max_part_size)
+                    else:
+                        # File is too large even with max part size, we need to split it further
+                        logging.error(f"Chunk {i+1} is too large ({format_size(chunk_size)}) for Telegram upload")
+                        raise ValueError(f"Chunk {i+1} exceeds maximum uploadable size")
+                    
                     total_parts = (chunk_size + part_size - 1) // part_size
 
                     # Validate parameters
-                    if total_parts <= 0:
-                        raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts}")
+                    if total_parts <= 0 or total_parts > max_parts:
+                        raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts} (max allowed: {max_parts})")
 
                     # Verify last part will be valid size
                     last_part_size = chunk_size - (total_parts - 1) * part_size
                     if last_part_size <= 0 or last_part_size > part_size:
                         logging.warning(f"Chunk {i+1}: Last part size validation - {last_part_size} bytes")
+                    
+                    logging.info(f"Chunk {i+1}: Using part_size={format_size(part_size)}, total_parts={total_parts}")
 
                     # Optimize concurrency based on file size and network conditions
                     if chunk_size > 1024 * 1024 * 1024:  # > 1GB chunks
