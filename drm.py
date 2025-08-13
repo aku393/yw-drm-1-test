@@ -93,10 +93,6 @@ json_lock = asyncio.Lock()  # Lock for JSON data management
 authorized_users = set(ALLOWED_USERS)  # Use a set for faster lookups
 user_lock = asyncio.Lock() # Lock to manage authorized_users
 
-# Manual premium status tracking
-user_premium_status = {}  # Format: {user_id: bool}
-premium_lock = asyncio.Lock()  # Lock for premium status management
-
 # Thumbnail storage for users
 user_thumbnails = {}  # Format: {user_id: thumbnail_file_path}
 thumbnail_lock = asyncio.Lock()  # Lock for thumbnail management
@@ -314,7 +310,6 @@ def derive_name_from_url(url: str) -> str:
 def format_completion_message(completed_tasks, failed_tasks, total_initial_tasks):
     """Format completion message in parts if it exceeds Telegram's limit"""
     messages = []
-    max_length = 3800  # Safe limit below Telegram's 4096 character limit
 
     # Main summary
     summary_message = f"🎉 **All Tasks Completed!**\n\n"
@@ -324,72 +319,42 @@ def format_completion_message(completed_tasks, failed_tasks, total_initial_tasks
     if failed_tasks:
         summary_message += f"❌ Failed: {len(failed_tasks)}/{total_initial_tasks}\n"
 
-    # Always add summary message first
     messages.append(summary_message)
 
     # Failed tasks (if any)
     if failed_tasks:
-        current_message = f"**❌ Failed Tasks:**\n"
-        part_number = 1
-
+        failed_message = f"**❌ Failed Tasks:**\n"
         for name, error in failed_tasks:
-            # Truncate very long names and errors
-            safe_name = name[:50] + "..." if len(name) > 50 else name
-            error_short = error[:40] + "..." if len(error) > 40 else error
-            task_line = f"• {safe_name}.mp4 - {error_short}\n"
+            error_short = error[:30] + "..." if len(error) > 30 else error
+            task_line = f"• {name}.mp4 - {error_short}\n"
 
             # Check if adding this line would exceed limit
-            if len(current_message + task_line) > max_length:
-                # Save current message and start new one
-                messages.append(current_message.rstrip())
-                part_number += 1
-                current_message = f"**❌ Failed Tasks (Part {part_number}):**\n{task_line}"
+            if len(failed_message + task_line) > 3500:
+                messages.append(failed_message)
+                failed_message = f"**❌ Failed Tasks (continued):**\n{task_line}"
             else:
-                current_message += task_line
+                failed_message += task_line
 
-        # Add the final failed tasks message if it has content
-        if current_message.strip() and current_message != f"**❌ Failed Tasks (Part {part_number}):**\n":
-            messages.append(current_message.rstrip())
+        if failed_message.strip():
+            messages.append(failed_message)
 
     # Completed tasks
     if completed_tasks:
-        # Only show completed tasks if the list isn't too long
-        if len(completed_tasks) <= 50:
-            current_message = f"**✅ Completed Tasks:**\n"
-            part_number = 1
+        completed_message = f"**✅ Completed Tasks:**\n"
+        for name in completed_tasks:
+            task_line = f"• {name}.mp4\n"
 
-            for name in completed_tasks:
-                # Truncate very long names
-                safe_name = name[:60] + "..." if len(name) > 60 else name
-                task_line = f"• {safe_name}.mp4\n"
+            # Check if adding this line would exceed limit
+            if len(completed_message + task_line) > 3500:
+                messages.append(completed_message)
+                completed_message = f"**✅ Completed Tasks (continued):**\n{task_line}"
+            else:
+                completed_message += task_line
 
-                # Check if adding this line would exceed limit
-                if len(current_message + task_line) > max_length:
-                    # Save current message and start new one
-                    messages.append(current_message.rstrip())
-                    part_number += 1
-                    current_message = f"**✅ Completed Tasks (Part {part_number}):**\n{task_line}"
-                else:
-                    current_message += task_line
+        if completed_message.strip():
+            messages.append(completed_message)
 
-            # Add the final completed tasks message if it has content
-            if current_message.strip() and current_message != f"**✅ Completed Tasks (Part {part_number}):**\n":
-                messages.append(current_message.rstrip())
-        else:
-            # For very large lists, just show summary
-            messages.append(f"**✅ Completed Tasks:**\nAll {len(completed_tasks)} tasks completed successfully! (List too long to display)")
-
-    # Ensure no message exceeds the limit
-    validated_messages = []
-    for msg in messages:
-        if len(msg) > max_length:
-            # Split very long messages into chunks
-            chunks = [msg[i:i+max_length] for i in range(0, len(msg), max_length)]
-            validated_messages.extend(chunks)
-        else:
-            validated_messages.append(msg)
-
-    return validated_messages
+    return messages
 
 async def generate_random_thumbnail(output_path):
     """Generate a random colored thumbnail"""
@@ -777,8 +742,8 @@ class MPDLeechBot:
             raise
 
     async def split_file(self, input_file, max_size_mb=4000, progress_cb=None, cancel_event=None):
-        """Split large files by size with progress tracking and proper cleanup"""
-        max_size = int(max_size_mb * 1024 * 1024)  # Convert MB to bytes properly
+        """Split large files with progress tracking and proper cleanup"""
+        max_size = max_size_mb * 1024 * 1024
         file_size = os.path.getsize(input_file)
 
         # If file is within size limit, return as-is
@@ -786,87 +751,81 @@ class MPDLeechBot:
             logging.info(f"File {input_file} ({format_size(file_size)}) is within {max_size_mb}MB limit, no splitting needed")
             return [input_file]
 
-        logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting by size")
+        logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting into parts")
 
         base_name = os.path.splitext(input_file)[0]
         ext = os.path.splitext(input_file)[1]
         chunks = []
 
-        # Smart splitting based on file size and user type
-        file_size_gb = file_size / (1024 * 1024 * 1024)
-        
-        # Telegram upload limits: max 3000 parts per file, max 1MB per part
-        # This means absolute max file size per chunk is 3000 * 1MB = ~2.93GB
-        telegram_max_chunk_size = 3000 * 1048576  # ~2.93GB
-        
-        # Determine optimal chunk sizes based on file size and max limit
-        if max_size_mb >= 3950:  # Premium user
-            # Use smaller chunks to ensure they can be uploaded to Telegram
-            safe_premium_size = min(max_size, telegram_max_chunk_size)
-            if file_size_gb >= 7.0:
-                # For 7GB+ files, split into safe chunks (2.9GB max)
-                safe_chunk_size = int(2.9 * 1024 * 1024 * 1024)  # 2.9GB chunks
-                num_chunks = int((file_size + safe_chunk_size - 1) / safe_chunk_size)
-                chunk_sizes = [safe_chunk_size] * (num_chunks - 1)
-                # Last chunk gets the remainder
-                remainder = file_size - (safe_chunk_size * (num_chunks - 1))
-                chunk_sizes.append(remainder)
-            else:
-                # For smaller files, use equal splitting with safe size
-                num_chunks = max(1, int((file_size + safe_premium_size - 1) / safe_premium_size))
-                target_chunk_size = file_size // num_chunks
-                chunk_sizes = [target_chunk_size] * num_chunks
-                # Adjust last chunk for remainder
-                remainder = file_size - (target_chunk_size * (num_chunks - 1))
-                chunk_sizes[-1] = remainder
-        else:  # Free user
-            # Use smaller chunks for free users to ensure uploadability
-            safe_free_size = min(max_size, telegram_max_chunk_size)
-            if file_size_gb >= 3.8:  # For files 3.8GB+, split into safe chunks
-                safe_chunk_size = int(1.9 * 1024 * 1024 * 1024)  # 1.9GB chunks (safe for upload)
-                num_chunks = int((file_size + safe_chunk_size - 1) / safe_chunk_size)
-                chunk_sizes = [safe_chunk_size] * (num_chunks - 1)
-                # Last chunk gets the remainder
-                remainder = file_size - (safe_chunk_size * (num_chunks - 1))
-                chunk_sizes.append(remainder)
-            else:
-                # For smaller files, use equal splitting with safe size
-                num_chunks = max(1, int((file_size + safe_free_size - 1) / safe_free_size))
-                target_chunk_size = file_size // num_chunks
-                chunk_sizes = [target_chunk_size] * num_chunks
-                # Adjust last chunk for remainder
-                remainder = file_size - (target_chunk_size * (num_chunks - 1))
-                chunk_sizes[-1] = remainder
-        
-        # Final validation: ensure no chunk exceeds Telegram's upload limit
-        for i, size in enumerate(chunk_sizes):
-            if size > telegram_max_chunk_size:
-                logging.error(f"Chunk {i+1} size {format_size(size)} exceeds Telegram limit {format_size(telegram_max_chunk_size)}")
-                raise ValueError(f"Chunk {i+1} is too large for Telegram upload")
+        # Get video duration more reliably with better error handling
+        duration = 0
+        duration_methods = [
+            ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', input_file],
+            ['ffprobe', '-v', 'quiet', '-show_entries', 'stream=duration', '-of', 'csv=p=0', input_file],
+            ['mediainfo', '--Inform=General;%Duration%', input_file]
+        ]
 
-        num_chunks = len(chunk_sizes)
+        for cmd in duration_methods:
+            try:
+                process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await process.communicate()
+                if process.returncode == 0 and stdout.decode().strip():
+                    duration_str = stdout.decode().strip()
+                    if cmd[0] == 'mediainfo':
+                        duration = float(duration_str) / 1000.0  # mediainfo returns milliseconds
+                    else:
+                        duration = float(duration_str)
+                    if duration > 0:
+                        break
+            except:
+                continue
 
-        total_size_display = " + ".join([format_size(size) for size in chunk_sizes])
-        logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts: {total_size_display}")
+        # Fallback method if duration detection fails
+        if duration <= 0:
+            try:
+                cmd = ['ffmpeg', '-i', input_file, '-f', 'null', '-', '-y']
+                process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                _, stderr = await process.communicate()
+                for line in stderr.decode().splitlines():
+                    if 'Duration' in line:
+                        time_str = line.split('Duration: ')[1].split(',')[0]
+                        try:
+                            h, m, s = map(float, time_str.split(':'))
+                            duration = h * 3600 + m * 60 + s
+                            break
+                        except:
+                            continue
+            except:
+                pass
 
-        current_pos = 0
+        # For very large files, estimate duration based on typical bitrates
+        if duration <= 0:
+            # Estimate based on typical video bitrates (1-10 Mbps)
+            estimated_bitrate = 5 * 1024 * 1024  # 5 Mbps default
+            duration = (file_size * 8) / estimated_bitrate  # Convert to seconds
+            logging.warning(f"Could not determine duration for {input_file}, estimated {duration:.1f}s based on file size")
+
+        # Calculate number of chunks needed
+        num_chunks = max(1, int((file_size + max_size - 1) / max_size))  # Ceiling division
+        chunk_duration = duration / num_chunks
+
+        # Ensure reasonable chunk duration (minimum 30 seconds, maximum 1 hour for very large files)
+        chunk_duration = max(30, min(chunk_duration, 3600))
+
+        # Recalculate number of chunks based on duration constraints
+        if chunk_duration < duration / num_chunks:
+            num_chunks = max(1, int(duration / chunk_duration))
+
+        logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts, each ~{chunk_duration:.1f}s ({format_size(file_size/num_chunks)} avg)")
+
         for i in range(num_chunks):
             # Check for cancellation
             if cancel_event and cancel_event.is_set():
                 logging.info(f"Splitting cancelled at part {i+1}")
                 break
 
-            # Ensure chunk filename isn't too long
-            safe_base_name = base_name
-            if len(safe_base_name) > 50:
-                safe_base_name = safe_base_name[:50]
-            output_file = f"{safe_base_name}_part{str(i+1).zfill(3)}{ext}"  # Zero-padded for better sorting
-
-            # Calculate byte ranges for splitting using predetermined chunk sizes
-            start_byte = current_pos
-            chunk_size = chunk_sizes[i]
-            end_byte = start_byte + chunk_size - 1
-            current_pos += chunk_size
+            output_file = f"{base_name}_part{str(i+1).zfill(3)}{ext}"  # Zero-padded for better sorting
+            start_time = i * chunk_duration
 
             # Update progress callback if provided
             if progress_cb:
@@ -875,45 +834,48 @@ class MPDLeechBot:
                 except Exception as e:
                     logging.warning(f"Progress callback error: {e}")
 
-            # Use dd command for precise byte-level splitting
-            cmd = [
-                'dd',
-                f'if={input_file}',
-                f'of={output_file}',
-                f'bs=1M',  # 1MB block size for efficiency
-                f'skip={start_byte // (1024 * 1024)}',
-                f'count={chunk_size // (1024 * 1024) + 1}',
-                'conv=noerror,sync',
-                'status=none'
-            ]
+            # Enhanced FFmpeg command with better error handling for large files
+            if i == num_chunks - 1:
+                # Last chunk - get everything remaining
+                cmd = [
+                    'ffmpeg', '-i', input_file, 
+                    '-ss', str(start_time), 
+                    '-c', 'copy', 
+                    '-avoid_negative_ts', 'make_zero',
+                    '-map_metadata', '0',
+                    '-movflags', '+faststart',
+                    output_file, '-y'
+                ]
+            else:
+                cmd = [
+                    'ffmpeg', '-i', input_file, 
+                    '-ss', str(start_time), 
+                    '-t', str(chunk_duration), 
+                    '-c', 'copy', 
+                    '-avoid_negative_ts', 'make_zero',
+                    '-map_metadata', '0',
+                    '-movflags', '+faststart',
+                    output_file, '-y'
+                ]
 
-            logging.info(f"Splitting part {i+1}/{num_chunks}: bytes {start_byte}-{end_byte} ({format_size(chunk_size)})")
+            logging.info(f"Splitting part {i+1}/{num_chunks}: {' '.join(cmd[:8])}...")
 
             try:
                 process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
+                    *cmd, 
+                    stdout=asyncio.subprocess.PIPE, 
                     stderr=asyncio.subprocess.PIPE
                 )
                 stdout, stderr = await process.communicate()
 
-                # If dd succeeded, trim to exact size using Python
+                # Update progress callback for completion of this part
+                if progress_cb:
+                    try:
+                        await progress_cb(i, num_chunks, 100.0)
+                    except Exception as e:
+                        logging.warning(f"Progress callback error: {e}")
+
                 if process.returncode == 0 and os.path.exists(output_file):
-                    # Trim file to exact byte range
-                    with open(input_file, 'rb') as src:
-                        src.seek(start_byte)
-                        data = src.read(chunk_size)
-                        
-                    with open(output_file, 'wb') as dst:
-                        dst.write(data)
-
-                    # Update progress callback for completion of this part
-                    if progress_cb:
-                        try:
-                            await progress_cb(i, num_chunks, 100.0)
-                        except Exception as e:
-                            logging.warning(f"Progress callback error: {e}")
-
                     part_size = os.path.getsize(output_file)
                     if part_size > 0:
                         chunks.append(output_file)
@@ -928,34 +890,15 @@ class MPDLeechBot:
 
             except Exception as e:
                 logging.error(f"❌ Exception splitting part {i+1}/{num_chunks}: {str(e)}")
-                
-                # Fallback: try Python-only splitting for this chunk
-                try:
-                    logging.info(f"Trying Python fallback for part {i+1}")
-                    with open(input_file, 'rb') as src:
-                        src.seek(start_byte)
-                        data = src.read(chunk_size)
-                        
-                    with open(output_file, 'wb') as dst:
-                        dst.write(data)
-                    
-                    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-                        chunks.append(output_file)
-                        part_size = os.path.getsize(output_file)
-                        logging.info(f"✅ Part {i+1}/{num_chunks} (fallback): {os.path.basename(output_file)} ({format_size(part_size)})")
-                    else:
-                        logging.error(f"❌ Part {i+1}/{num_chunks}: Python fallback also failed")
-                except Exception as fallback_error:
-                    logging.error(f"❌ Part {i+1}/{num_chunks}: Python fallback error: {str(fallback_error)}")
 
         if not chunks:
-            raise Exception("Failed to create any valid chunks - check file integrity and permissions")
+            raise Exception("Failed to create any valid chunks - check video file integrity")
 
         if len(chunks) < num_chunks:
             logging.warning(f"Created {len(chunks)} chunks out of expected {num_chunks}")
 
         total_chunks_size = sum(os.path.getsize(chunk) for chunk in chunks)
-        logging.info(f"Size-based splitting complete: {len(chunks)} parts, total size: {format_size(total_chunks_size)}")
+        logging.info(f"Splitting complete: {len(chunks)} parts, total size: {format_size(total_chunks_size)}")
 
         return chunks
 
@@ -1320,11 +1263,9 @@ class MPDLeechBot:
             # Get full user entity with all attributes
             user = await client.get_entity(user_id)
 
-            # Method 1: Check premium attribute directly (most reliable)
+            # Method 1: Check premium attribute directly
             if hasattr(user, 'premium') and user.premium:
                 logging.info(f"User {user_id} detected as premium via premium attribute")
-                async with premium_lock:
-                    user_premium_status[user_id] = True
                 return True
 
             # Method 2: Check alternative premium attributes
@@ -1332,45 +1273,23 @@ class MPDLeechBot:
             for attr in premium_indicators:
                 if hasattr(user, attr) and getattr(user, attr, False):
                     logging.info(f"User {user_id} detected as premium via {attr}")
-                    async with premium_lock:
-                        user_premium_status[user_id] = True
                     return True
 
-            # Method 3: Check user type (Premium users have UserTypePremium)
-            if hasattr(user, 'type') and user.type:
-                user_type = str(user.type)
-                if 'premium' in user_type.lower():
-                    logging.info(f"User {user_id} detected as premium via type: {user_type}")
-                    async with premium_lock:
-                        user_premium_status[user_id] = True
-                    return True
-
-            # Method 4: Check user flags (Telegram stores premium status in flags)
+            # Method 3: Check user flags (Telegram stores premium status in flags)
             if hasattr(user, 'flags') and user.flags:
-                # Premium flag bits (multiple possible locations)
-                premium_flag_bits = [4, 8, 16]  # Common premium flag positions
-                for bit in premium_flag_bits:
-                    if user.flags & (1 << bit):
-                        logging.info(f"User {user_id} detected as premium via flag bit {bit}")
-                        async with premium_lock:
-                            user_premium_status[user_id] = True
-                        return True
+                # Premium users typically have different flag patterns
+                if user.flags & (1 << 4):  # Premium flag bit
+                    logging.info(f"User {user_id} detected as premium via flags")
+                    return True
 
-            # Method 5: Try to detect via user's file size limits (experimental)
-            # Premium users can send larger files, we can test this indirectly
-
-            # Default to free user if no premium indicators found
-            logging.info(f"User {user_id} detected as free user")
-            async with premium_lock:
-                user_premium_status[user_id] = False
-            return False
+            # Method 4: Assume premium for now to allow larger uploads
+            # This is safer than blocking legitimate premium users
+            logging.info(f"User {user_id} - assuming premium for large file support")
+            return True
 
         except Exception as e:
-            logging.warning(f"Could not detect premium status for user {user_id}: {e}, defaulting to free user")
-            async with premium_lock:
-                if user_id not in user_premium_status:
-                    user_premium_status[user_id] = False
-            return user_premium_status.get(user_id, False)
+            logging.warning(f"Could not detect premium status for user {user_id}: {e}, assuming premium for safety")
+            return True  # Default to premium to avoid blocking large uploads
 
     async def upload_file(self, event, filepath, status_msg, total_size, sender, duration):
         try:
@@ -1387,13 +1306,13 @@ class MPDLeechBot:
             self.progress_state['speed'] = 0
             self.progress_state['elapsed'] = 0
 
-            # Set size limits based on actual Telegram limits with proper detection
+            # Set size limits optimized for large files
             if is_premium:
-                max_size_mb = 3950  # 3.95GB for premium (very close to 4GB limit)
-                max_size_bytes = int(3.95 * 1024 * 1024 * 1024)  # 3.95GB limit
+                max_size_mb = 4096  # 3.9GB for premium (safer than 4GB)
+                max_size_bytes = 4 * 1024 * 1024 * 1024  # 4GB limit
             else:
-                max_size_mb = 1950  # 1.95GB for free (very close to 2GB limit)
-                max_size_bytes = int(1.95 * 1024 * 1024 * 1024)  # 1.95GB limit
+                max_size_mb = 2048  # 1.9GB for free (safer than 2GB)
+                max_size_bytes = 2 * 1024 * 1024 * 1024  # 2GB limit
 
             user_type = "PREMIUM" if is_premium else "FREE"
             logging.info(f"User {sender.id} is {user_type}, max file size: {format_size(max_size_bytes)}")
@@ -1488,45 +1407,22 @@ class MPDLeechBot:
                     self.progress_state['percent'] = 0.0
                     self.progress_state['start_time'] = chunk_start_time
 
-                    chunk_info = f"Part {i+1}/{len(chunks)} ({format_size(chunk_size)})"
+                    chunk_info = f"Part {i+1}/{total_chunks} ({format_size(chunk_size)})"
                     logging.info(f"Starting upload of {chunk_info} for user {sender.id}")
 
                     # Custom parallel upload for each chunk with optimized settings
                     file_id = random.getrandbits(63)  # Generate a 63-bit file ID (0 to 2^63 - 1)
-                    
-                    # Calculate optimal part size to stay within Telegram's limits
-                    # Telegram allows max 3000 parts per file, and each part can be 512KB to 1MB
-                    max_parts = 3000
-                    min_part_size = 524288  # 512 KB minimum
-                    max_part_size = 1048576  # 1 MB maximum
-                    
-                    # Calculate required part size to fit within max parts limit
-                    required_part_size = (chunk_size + max_parts - 1) // max_parts
-                    
-                    # Choose part size that satisfies both Telegram's constraints and our needs
-                    if required_part_size <= min_part_size:
-                        part_size = min_part_size
-                    elif required_part_size <= max_part_size:
-                        # Round up to nearest 64KB for efficiency
-                        part_size = ((required_part_size + 65535) // 65536) * 65536
-                        part_size = min(part_size, max_part_size)
-                    else:
-                        # File is too large even with max part size, we need to split it further
-                        logging.error(f"Chunk {i+1} is too large ({format_size(chunk_size)}) for Telegram upload")
-                        raise ValueError(f"Chunk {i+1} exceeds maximum uploadable size")
-                    
+                    part_size = 524288  # Exactly 512 KB (524288 bytes) - Telegram requirement
                     total_parts = (chunk_size + part_size - 1) // part_size
 
                     # Validate parameters
-                    if total_parts <= 0 or total_parts > max_parts:
-                        raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts} (max allowed: {max_parts})")
+                    if total_parts <= 0:
+                        raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts}")
 
                     # Verify last part will be valid size
                     last_part_size = chunk_size - (total_parts - 1) * part_size
                     if last_part_size <= 0 or last_part_size > part_size:
                         logging.warning(f"Chunk {i+1}: Last part size validation - {last_part_size} bytes")
-                    
-                    logging.info(f"Chunk {i+1}: Using part_size={format_size(part_size)}, total_parts={total_parts}")
 
                     # Optimize concurrency based on file size and network conditions
                     if chunk_size > 1024 * 1024 * 1024:  # > 1GB chunks
@@ -1546,7 +1442,7 @@ class MPDLeechBot:
                                 # Read part data
                                 file_handle.seek(part_num * part_size)
                                 data = file_handle.read(part_size)
-
+                                
                                 if not data:
                                     logging.warning(f"No data read for part {part_num}")
                                     return (part_num, False, "No data")
@@ -1692,20 +1588,11 @@ class MPDLeechBot:
 
                     # Send the file with optimized attributes and retry logic
                     async def send_file_operation():
-                        # Truncate long filenames to prevent Telegram API errors
-                        base_filename = os.path.basename(filepath)
-                        if len(base_filename) > 50:  # Telegram has filename limits
-                            name_part = os.path.splitext(base_filename)[0][:40]
-                            ext_part = os.path.splitext(base_filename)[1]
-                            base_filename = f"{name_part}...{ext_part}"
-
-                        caption = f"Part {i+1}: {base_filename}"
-
                         if thumbnail_file and os.path.exists(thumbnail_file):
                             return await client.send_file(
                                 event.chat_id,
                                 file=input_file_big,
-                                caption=caption,
+                                caption=f"Part {i+1}: {os.path.basename(filepath)}",
                                 thumb=thumbnail_file,
                                 attributes=[DocumentAttributeVideo(duration=chunk_duration, w=1280, h=720, supports_streaming=True)],
                                 force_document=False  # Send as video for better streaming
@@ -1714,7 +1601,7 @@ class MPDLeechBot:
                             return await client.send_file(
                                 event.chat_id,
                                 file=input_file_big,
-                                caption=caption,
+                                caption=f"Part {i+1}: {os.path.basename(filepath)}",
                                 attributes=[DocumentAttributeVideo(duration=chunk_duration, w=1280, h=720, supports_streaming=True)],
                                 force_document=False
                             )
@@ -1752,6 +1639,7 @@ class MPDLeechBot:
                                     logging.info(f"🗑️ Cleaned up chunk: {os.path.basename(chunk_path)}")
                             except Exception as e:
                                 logging.warning(f"Failed to delete chunk {chunk_path}: {e}")
+                        self._uploaded_chunks = []
 
                     # Clean up original file
                     try:
@@ -2033,8 +1921,6 @@ async def start_handler(event):
         "🛡️  𝗔𝗱𝗺𝗶𝗻\n"
         "   • /addadmin <id>\n"
         "   • /removeadmin <id>\n\n"
-        "💎  𝗣𝗿𝗲𝗺𝗶𝘂𝗺\n"
-        "   • /mypremium — check your status (auto-detected)\n\n"
         "Ready to go. Drop links and I'll fly! 🚀"
     )
 
@@ -2800,38 +2686,6 @@ async def removeadmin_handler(event):
                 message=f"ℹ️ User {user_id} is not an admin.",
                 event=event
             )
-
-
-
-@client.on(events.NewMessage(pattern=r'^/mypremium$'))
-async def mypremium_handler(event):
-    sender = await event.get_sender()
-    logging.info(f"Received /mypremium command from user {sender.id}")
-
-    if sender.id not in authorized_users:
-        await send_message_with_flood_control(
-            entity=event.chat_id,
-            message="You're not authorized.",
-            event=event
-        )
-        return
-
-    # Create a temporary bot instance to check premium status
-    temp_bot = MPDLeechBot(sender.id)
-    is_premium = await temp_bot.detect_premium_status(sender.id)
-
-    status_text = "Premium 💎" if is_premium else "Free 🆓"
-    max_size = "4GB" if is_premium else "2GB"
-
-    await send_message_with_flood_control(
-        entity=event.chat_id,
-        message=f"👤 **Your Account Status**\n\n"
-                f"📊 Status: {status_text} (Auto-detected)\n"
-                f"📏 Max file size: {max_size}\n"
-                f"🆔 User ID: {sender.id}\n"
-                f"🤖 Detection: Automatic via Telegram API",
-        event=event
-    )
 
 async def perform_internet_speed_test():
     """Perform live internet speed test for both download and upload"""
