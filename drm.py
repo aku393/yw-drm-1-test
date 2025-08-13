@@ -741,146 +741,166 @@ class MPDLeechBot:
             logging.error(f"mp4decrypt error: {str(e)}")
             raise
 
-    async def split_file(self, input_file, max_size_mb=4000):  # Default to 4 GB for premium
-            max_size = max_size_mb * 1024 * 1024
-            file_size = os.path.getsize(input_file)
+    async def split_file(self, input_file, max_size_mb=4000, progress_cb=None, cancel_event=None):
+        """Split large files with progress tracking and proper cleanup"""
+        max_size = max_size_mb * 1024 * 1024
+        file_size = os.path.getsize(input_file)
 
-            # If file is within size limit, return as-is
-            if file_size <= max_size:
-                logging.info(f"File {input_file} ({format_size(file_size)}) is within {max_size_mb}MB limit, no splitting needed")
-                return [input_file]
+        # If file is within size limit, return as-is
+        if file_size <= max_size:
+            logging.info(f"File {input_file} ({format_size(file_size)}) is within {max_size_mb}MB limit, no splitting needed")
+            return [input_file]
 
-            logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting into parts")
+        logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting into parts")
 
-            base_name = os.path.splitext(input_file)[0]
-            ext = os.path.splitext(input_file)[1]
-            chunks = []
+        base_name = os.path.splitext(input_file)[0]
+        ext = os.path.splitext(input_file)[1]
+        chunks = []
 
-            # Get video duration more reliably with better error handling
-            duration = 0
-            duration_methods = [
-                ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', input_file],
-                ['ffprobe', '-v', 'quiet', '-show_entries', 'stream=duration', '-of', 'csv=p=0', input_file],
-                ['mediainfo', '--Inform=General;%Duration%', input_file]
-            ]
+        # Get video duration more reliably with better error handling
+        duration = 0
+        duration_methods = [
+            ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', input_file],
+            ['ffprobe', '-v', 'quiet', '-show_entries', 'stream=duration', '-of', 'csv=p=0', input_file],
+            ['mediainfo', '--Inform=General;%Duration%', input_file]
+        ]
 
-            for cmd in duration_methods:
-                try:
-                    process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                    stdout, stderr = await process.communicate()
-                    if process.returncode == 0 and stdout.decode().strip():
-                        duration_str = stdout.decode().strip()
-                        if cmd[0] == 'mediainfo':
-                            duration = float(duration_str) / 1000.0  # mediainfo returns milliseconds
-                        else:
-                            duration = float(duration_str)
-                        if duration > 0:
-                            break
-                except:
-                    continue
-
-            # Fallback method if duration detection fails
-            if duration <= 0:
-                try:
-                    cmd = ['ffmpeg', '-i', input_file, '-f', 'null', '-', '-y']
-                    process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                    _, stderr = await process.communicate()
-                    for line in stderr.decode().splitlines():
-                        if 'Duration' in line:
-                            time_str = line.split('Duration: ')[1].split(',')[0]
-                            try:
-                                h, m, s = map(float, time_str.split(':'))
-                                duration = h * 3600 + m * 60 + s
-                                break
-                            except:
-                                continue
-                except:
-                    pass
-
-            # For very large files, estimate duration based on typical bitrates
-            if duration <= 0:
-                # Estimate based on typical video bitrates (1-10 Mbps)
-                estimated_bitrate = 5 * 1024 * 1024  # 5 Mbps default
-                duration = (file_size * 8) / estimated_bitrate  # Convert to seconds
-                logging.warning(f"Could not determine duration for {input_file}, estimated {duration:.1f}s based on file size")
-
-            # Calculate number of chunks needed
-            num_chunks = max(1, int((file_size + max_size - 1) / max_size))  # Ceiling division
-            chunk_duration = duration / num_chunks
-
-            # Ensure reasonable chunk duration (minimum 30 seconds, maximum 1 hour for very large files)
-            chunk_duration = max(30, min(chunk_duration, 3600))
-
-            # Recalculate number of chunks based on duration constraints
-            if chunk_duration < duration / num_chunks:
-                num_chunks = max(1, int(duration / chunk_duration))
-
-            logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts, each ~{chunk_duration:.1f}s ({format_size(file_size/num_chunks)} avg)")
-
-            for i in range(num_chunks):
-                output_file = f"{base_name}_part{str(i+1).zfill(3)}{ext}"  # Zero-padded for better sorting
-                start_time = i * chunk_duration
-
-                # Enhanced FFmpeg command with better error handling for large files
-                if i == num_chunks - 1:
-                    # Last chunk - get everything remaining
-                    cmd = [
-                        'ffmpeg', '-i', input_file, 
-                        '-ss', str(start_time), 
-                        '-c', 'copy', 
-                        '-avoid_negative_ts', 'make_zero',
-                        '-map_metadata', '0',
-                        '-movflags', '+faststart',
-                        output_file, '-y'
-                    ]
-                else:
-                    cmd = [
-                        'ffmpeg', '-i', input_file, 
-                        '-ss', str(start_time), 
-                        '-t', str(chunk_duration), 
-                        '-c', 'copy', 
-                        '-avoid_negative_ts', 'make_zero',
-                        '-map_metadata', '0',
-                        '-movflags', '+faststart',
-                        output_file, '-y'
-                    ]
-
-                logging.info(f"Splitting part {i+1}/{num_chunks}: {' '.join(cmd[:8])}...")
-
-                try:
-                    process = await asyncio.create_subprocess_exec(
-                        *cmd, 
-                        stdout=asyncio.subprocess.PIPE, 
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    stdout, stderr = await process.communicate()
-
-                    if process.returncode == 0 and os.path.exists(output_file):
-                        part_size = os.path.getsize(output_file)
-                        if part_size > 0:
-                            chunks.append(output_file)
-                            logging.info(f"✅ Part {i+1}/{num_chunks}: {os.path.basename(output_file)} ({format_size(part_size)})")
-                        else:
-                            logging.error(f"❌ Part {i+1}/{num_chunks}: Empty file created")
-                            if os.path.exists(output_file):
-                                os.remove(output_file)
+        for cmd in duration_methods:
+            try:
+                process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await process.communicate()
+                if process.returncode == 0 and stdout.decode().strip():
+                    duration_str = stdout.decode().strip()
+                    if cmd[0] == 'mediainfo':
+                        duration = float(duration_str) / 1000.0  # mediainfo returns milliseconds
                     else:
-                        error_msg = stderr.decode() if stderr else "Unknown error"
-                        logging.error(f"❌ Part {i+1}/{num_chunks} failed: {error_msg}")
+                        duration = float(duration_str)
+                    if duration > 0:
+                        break
+            except:
+                continue
 
+        # Fallback method if duration detection fails
+        if duration <= 0:
+            try:
+                cmd = ['ffmpeg', '-i', input_file, '-f', 'null', '-', '-y']
+                process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                _, stderr = await process.communicate()
+                for line in stderr.decode().splitlines():
+                    if 'Duration' in line:
+                        time_str = line.split('Duration: ')[1].split(',')[0]
+                        try:
+                            h, m, s = map(float, time_str.split(':'))
+                            duration = h * 3600 + m * 60 + s
+                            break
+                        except:
+                            continue
+            except:
+                pass
+
+        # For very large files, estimate duration based on typical bitrates
+        if duration <= 0:
+            # Estimate based on typical video bitrates (1-10 Mbps)
+            estimated_bitrate = 5 * 1024 * 1024  # 5 Mbps default
+            duration = (file_size * 8) / estimated_bitrate  # Convert to seconds
+            logging.warning(f"Could not determine duration for {input_file}, estimated {duration:.1f}s based on file size")
+
+        # Calculate number of chunks needed
+        num_chunks = max(1, int((file_size + max_size - 1) / max_size))  # Ceiling division
+        chunk_duration = duration / num_chunks
+
+        # Ensure reasonable chunk duration (minimum 30 seconds, maximum 1 hour for very large files)
+        chunk_duration = max(30, min(chunk_duration, 3600))
+
+        # Recalculate number of chunks based on duration constraints
+        if chunk_duration < duration / num_chunks:
+            num_chunks = max(1, int(duration / chunk_duration))
+
+        logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts, each ~{chunk_duration:.1f}s ({format_size(file_size/num_chunks)} avg)")
+
+        for i in range(num_chunks):
+            # Check for cancellation
+            if cancel_event and cancel_event.is_set():
+                logging.info(f"Splitting cancelled at part {i+1}")
+                break
+
+            output_file = f"{base_name}_part{str(i+1).zfill(3)}{ext}"  # Zero-padded for better sorting
+            start_time = i * chunk_duration
+
+            # Update progress callback if provided
+            if progress_cb:
+                try:
+                    await progress_cb(i, num_chunks, 0.0)
                 except Exception as e:
-                    logging.error(f"❌ Exception splitting part {i+1}/{num_chunks}: {str(e)}")
+                    logging.warning(f"Progress callback error: {e}")
 
-            if not chunks:
-                raise Exception("Failed to create any valid chunks - check video file integrity")
+            # Enhanced FFmpeg command with better error handling for large files
+            if i == num_chunks - 1:
+                # Last chunk - get everything remaining
+                cmd = [
+                    'ffmpeg', '-i', input_file, 
+                    '-ss', str(start_time), 
+                    '-c', 'copy', 
+                    '-avoid_negative_ts', 'make_zero',
+                    '-map_metadata', '0',
+                    '-movflags', '+faststart',
+                    output_file, '-y'
+                ]
+            else:
+                cmd = [
+                    'ffmpeg', '-i', input_file, 
+                    '-ss', str(start_time), 
+                    '-t', str(chunk_duration), 
+                    '-c', 'copy', 
+                    '-avoid_negative_ts', 'make_zero',
+                    '-map_metadata', '0',
+                    '-movflags', '+faststart',
+                    output_file, '-y'
+                ]
 
-            if len(chunks) < num_chunks:
-                logging.warning(f"Created {len(chunks)} chunks out of expected {num_chunks}")
+            logging.info(f"Splitting part {i+1}/{num_chunks}: {' '.join(cmd[:8])}...")
 
-            total_chunks_size = sum(os.path.getsize(chunk) for chunk in chunks)
-            logging.info(f"Splitting complete: {len(chunks)} parts, total size: {format_size(total_chunks_size)}")
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd, 
+                    stdout=asyncio.subprocess.PIPE, 
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
 
-            return chunks
+                # Update progress callback for completion of this part
+                if progress_cb:
+                    try:
+                        await progress_cb(i, num_chunks, 100.0)
+                    except Exception as e:
+                        logging.warning(f"Progress callback error: {e}")
+
+                if process.returncode == 0 and os.path.exists(output_file):
+                    part_size = os.path.getsize(output_file)
+                    if part_size > 0:
+                        chunks.append(output_file)
+                        logging.info(f"✅ Part {i+1}/{num_chunks}: {os.path.basename(output_file)} ({format_size(part_size)})")
+                    else:
+                        logging.error(f"❌ Part {i+1}/{num_chunks}: Empty file created")
+                        if os.path.exists(output_file):
+                            os.remove(output_file)
+                else:
+                    error_msg = stderr.decode() if stderr else "Unknown error"
+                    logging.error(f"❌ Part {i+1}/{num_chunks} failed: {error_msg}")
+
+            except Exception as e:
+                logging.error(f"❌ Exception splitting part {i+1}/{num_chunks}: {str(e)}")
+
+        if not chunks:
+            raise Exception("Failed to create any valid chunks - check video file integrity")
+
+        if len(chunks) < num_chunks:
+            logging.warning(f"Created {len(chunks)} chunks out of expected {num_chunks}")
+
+        total_chunks_size = sum(os.path.getsize(chunk) for chunk in chunks)
+        logging.info(f"Splitting complete: {len(chunks)} parts, total size: {format_size(total_chunks_size)}")
+
+        return chunks
 
     async def download_and_decrypt(self, event, mpd_url, key, name, sender):
         if self.is_downloading:
@@ -1415,6 +1435,38 @@ class MPDLeechBot:
                     semaphore = asyncio.Semaphore(max_concurrent)
                     logging.info(f"Chunk {i+1}/{len(chunks)}: {format_size(chunk_size)}, {total_parts} parts, {max_concurrent} concurrent, file_id: {file_id}")
 
+                    async def upload_part(file_id, part_num, part_size, total_parts, file_handle, progress, semaphore):
+                        """Upload a single part of a large file"""
+                        async with semaphore:
+                            try:
+                                # Read part data
+                                file_handle.seek(part_num * part_size)
+                                data = file_handle.read(part_size)
+                                
+                                if not data:
+                                    logging.warning(f"No data read for part {part_num}")
+                                    return (part_num, False, "No data")
+
+                                # Use SaveBigFilePartRequest for large files
+                                result = await client(SaveBigFilePartRequest(
+                                    file_id=file_id,
+                                    file_part=part_num,
+                                    file_total_parts=total_parts,
+                                    bytes=data
+                                ))
+
+                                if result:
+                                    progress['uploaded'] += len(data)
+                                    logging.info(f"Part {part_num}/{total_parts-1} uploaded successfully ({len(data)} bytes)")
+                                    return (part_num, True, None)
+                                else:
+                                    logging.error(f"Part {part_num} upload failed - no result")
+                                    return (part_num, False, "Upload returned False")
+
+                            except Exception as e:
+                                logging.error(f"Part {part_num} upload error: {e}")
+                                return (part_num, False, str(e))
+
                     async def update_progress():
                         nonlocal last_update_time, status_msg
                         last_percent = 0
@@ -1842,7 +1894,7 @@ async def start_handler(event):
 
     welcome_message = (
         "✨ ————  𝚉𝚎𝚛𝚘𝚃𝚛𝚊𝚌𝚎 𝙻𝚎𝚎𝚌𝚑 𝙱𝚘𝚝  ———— ✨\n\n"
-        "Hello! I'm your ultra-fast Telegram DRM leech bot. Here's what I can do for you:\n\n"
+        "Hello! I'm your ultra-fast Telegram leech bot. Here's what I can do for you:\n\n"
         "📥  𝗟𝗲𝗲𝗰𝗵 (DRM/Direct)\n"
         "   • /leech\n"
         "   • `<mpd_url>|<key>|<name>`\n"
