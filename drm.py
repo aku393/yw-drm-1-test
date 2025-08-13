@@ -1413,7 +1413,9 @@ class MPDLeechBot:
                     # Custom parallel upload for each chunk with optimized settings
                     file_id = random.getrandbits(63)  # Generate a 63-bit file ID (0 to 2^63 - 1)
                     part_size = 524288  # Exactly 512 KB (524288 bytes) - Telegram requirement
-                    total_parts = (chunk_size + part_size - 1) // part_size
+                    total_parts = chunk_size // part_size
+                    if chunk_size % part_size != 0:
+                    total_parts += 1
 
                     # Validate parameters
                     if total_parts <= 0:
