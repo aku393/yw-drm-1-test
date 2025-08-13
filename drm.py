@@ -1753,7 +1753,7 @@ async def _upload_single_file(self, event, filepath, file_size, sender, duration
             logging.error(f"Single file upload failed: {str(e)}")
             raise
 
-    async def process_task(self, event, task_data, sender, starting_msg=None):
+async def process_task(self, event, task_data, sender, starting_msg=None):
         """Process a single task with better error handling and cleanup"""
         filepath = None
         status_msg = None
