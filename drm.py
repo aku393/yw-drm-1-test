@@ -1415,7 +1415,7 @@ class MPDLeechBot:
                     part_size = 524288  # Exactly 512 KB (524288 bytes) - Telegram requirement
                     total_parts = chunk_size // part_size
                     if chunk_size % part_size != 0:
-                    total_parts += 1
+                        total_parts += 1
 
                     # Validate parameters
                     if total_parts <= 0:
