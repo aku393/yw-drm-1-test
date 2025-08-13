@@ -1916,7 +1916,7 @@ async def process_queue(self, event):
         
         logging.info(f"Queue processor finished for user {self.user_id}")
 
-    def cleanup(self, filepath):
+def cleanup(self, filepath):
         """Enhanced cleanup with better error handling"""
         try:
             if filepath and os.path.exists(filepath):
