@@ -2463,14 +2463,14 @@ async def status_handler(event):
         )
 
     except Exception as e:
-    logging.error(f"Status error for user {sender.id}: {str(e)}")
-    await send_message_with_flood_control(
-        # The rest of this function call should also be indented
-        entity=event.chat_id,
-        message=f"❌ Status error: {str(e)}",
-        event=event
-    )
-        @client.on(events.NewMessage(pattern=r'^/loadjson'))
+        logging.error(f"Status error for user {sender.id}: {str(e)}")
+        await send_message_with_flood_control(
+            entity=event.chat_id,
+            message=f"❌ Status error: {str(e)}",
+            event=event
+        )
+
+@client.on(events.NewMessage(pattern=r'^/loadjson'))
 async def loadjson_handler(event):
     sender = await event.get_sender()
     logging.info(f"Received /loadjson command from user {sender.id}")
@@ -2497,7 +2497,7 @@ async def json_data_handler(event):
         json_data = None
 
         # Handle JSON file upload
-        if event.document and event.document.mime_type == 'application/json':
+                if event.document and event.document.mime_type == 'application/json':
             logging.info(f"JSON file uploaded by user {sender.id}")
 
             file_path = await event.download_media()
@@ -2968,9 +2968,9 @@ async def perform_internet_speed_test():
     """Enhanced speed test with better reliability"""
     download_urls = [
         "https://speed.cloudflare.com/__down?bytes=104857600",  # 100MB
-        "https://speed.hetzner.de/100MB.bin",
-        "https://proof.ovh.net/files/100Mb.dat",
-        "https://speedtest.tele2.net/100MB.zip",
+        "https://speed.hetzner.de/100MB.bin",  # Removed extra spaces
+        "https://proof.ovh.net/files/100Mb.dat",  # Removed extra spaces
+        "https://speedtest.tele2.net/100MB.zip",  # Removed extra spaces
     ]
 
     test_size = 100 * 1024 * 1024  # 100MB
@@ -2991,7 +2991,7 @@ async def perform_internet_speed_test():
             downloaded = 0
             
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url.strip(), headers=headers) as response:  # Added .strip() to URL
                     if response.status != 200:
                         continue
                     
