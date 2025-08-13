@@ -103,7 +103,7 @@ json_lock = asyncio.Lock()  # Lock for JSON data management
 
 # User management storage
 authorized_users = set(ALLOWED_USERS)  # Use a set for faster lookups
-user_lock = asyncio.Lock() # Lock to manage authorized_users
+user_lock = asyncio.Lock()  # Lock to manage authorized_users
 
 # Thumbnail storage for users
 user_thumbnails = {}  # Format: {user_id: thumbnail_file_path}
@@ -413,6 +413,7 @@ async def generate_random_thumbnail(output_path):
     except Exception as e:
         logging.error(f"Error generating random thumbnail: {str(e)}")
         return False
+
 async def extract_video_frame_thumbnail(video_path, output_path, duration=None):
     """Extract a random frame from video as thumbnail"""
     try:
@@ -839,7 +840,8 @@ class MPDLeechBot:
         except Exception as e:
             logging.error(f"mp4decrypt error: {str(e)}")
             raise
-async def split_file(self, input_file, max_size_mb=None, progress_cb=None, cancel_event: asyncio.Event = None):
+
+    async def split_file(self, input_file, max_size_mb=None, progress_cb=None, cancel_event: asyncio.Event = None):
         """Optimized file splitting with proper size limits based on session type"""
         if max_size_mb is None:
             # Use session-appropriate chunk size
@@ -933,7 +935,7 @@ async def split_file(self, input_file, max_size_mb=None, progress_cb=None, cance
         logging.info(f"File splitting completed: {len(chunks)} chunks created")
         return chunks
 
-async def download_and_decrypt(self, event, mpd_url, key, name, sender):
+    async def download_and_decrypt(self, event, mpd_url, key, name, sender):
         """Optimized DRM download and decryption process"""
         if self.is_downloading:
             logging.info(f"Another download is already in progress for user {self.user_id}")
