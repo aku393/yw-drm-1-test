@@ -1342,7 +1342,8 @@ class MPDLeechBot:
             raise
         finally:
             self.is_downloading = False
-async def upload_file(self, event, filepath, status_msg, total_size, sender, duration):
+
+    async def upload_file(self, event, filepath, status_msg, total_size, sender, duration):
         """Optimized file upload with proper session handling and instant finalization"""
         try:
             file_size = os.path.getsize(filepath)
@@ -1490,7 +1491,7 @@ async def upload_file(self, event, filepath, status_msg, total_size, sender, dur
         finally:
             self.has_notified_split = False
 
-async def _upload_single_file(self, event, filepath, file_size, sender, duration, caption):
+    async def _upload_single_file(self, event, filepath, file_size, sender, duration, caption):
         """Optimized single file upload with instant finalization"""
         try:
             part_size = self.limits['part_size']
@@ -1755,7 +1756,7 @@ async def _upload_single_file(self, event, filepath, file_size, sender, duration
             logging.error(f"Single file upload failed: {str(e)}")
             raise
 
-async def process_task(self, event, task_data, sender, starting_msg=None):
+    async def process_task(self, event, task_data, sender, starting_msg=None):
         """Process a single task with better error handling and cleanup"""
         filepath = None
         status_msg = None
@@ -1858,7 +1859,7 @@ async def process_task(self, event, task_data, sender, starting_msg=None):
                     except Exception as e:
                         logging.warning(f"Cleanup failed for {file}: {e}")
 
-async def process_queue(self, event):
+    async def process_queue(self, event):
         """Process task queue with improved error handling"""
         user_queue, user_states, user_lock = get_user_resources(self.user_id)
         user_bot_instances[self.user_id] = self  # Register instance
@@ -1918,7 +1919,7 @@ async def process_queue(self, event):
         
         logging.info(f"Queue processor finished for user {self.user_id}")
 
-def cleanup(self, filepath):
+    def cleanup(self, filepath):
         """Enhanced cleanup with better error handling"""
         try:
             if filepath and os.path.exists(filepath):
@@ -1946,7 +1947,8 @@ def cleanup(self, filepath):
                         logging.warning(f"Failed to cleanup old file {file_path}: {e}")
         except Exception as e:
             logging.warning(f"Old file cleanup failed: {e}")
-            # Event handlers with fixed command implementations
+
+# Event handlers with fixed command implementations
 
 @client.on(events.NewMessage(pattern=r'^/start'))
 async def start_handler(event):
