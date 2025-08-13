@@ -1414,8 +1414,18 @@ class MPDLeechBot:
                     # Custom parallel upload for each chunk with optimized settings
                     file_id = random.getrandbits(63)  # Generate a 63-bit file ID (0 to 2^63 - 1)
                     part_size = 512 * 1024  # Telegram requirement (512 KB exact)
+                    
+                    # Wait until file is stable before checking size
+                    last_size = -1
+                    while True:
+                        current_size = os.path.getsize(chunk)
+                        if current_size == last_size:  # size hasn't changed since last check
+                            break
+                        last_size = current_size
+                        time.sleep(0.5)  # small delay before rechecking
+
                     # Get actual chunk size from disk to avoid stale/mismatched sizes
-                    chunk_size = os.path.getsize(chunk)
+                    chunk_size = last_size
                     total_parts = math.ceil(chunk_size / part_size)
 
                     # Final sanity check for last part size
