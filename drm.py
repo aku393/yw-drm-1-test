@@ -1488,7 +1488,7 @@ async def upload_file(self, event, filepath, status_msg, total_size, sender, dur
         finally:
             self.has_notified_split = False
 
-    async def _upload_single_file(self, event, filepath, file_size, sender, duration, caption):
+async def _upload_single_file(self, event, filepath, file_size, sender, duration, caption):
         """Optimized single file upload with instant finalization"""
         try:
             part_size = self.limits['part_size']
