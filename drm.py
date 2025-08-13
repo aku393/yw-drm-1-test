@@ -2459,12 +2459,12 @@ async def status_handler(event):
         )
 
     except Exception as e:
-        logging.error(f"Status error for user {sender.id}: {str(e)}")
-        await send_message_with_flood_control(
-            entity=event.chat_id,
-            message=f"❌ Status error: {str(e)}",
-            event=event
-        )
+    logging.error(f"Status error for user {sender.id}: {str(e)}")
+    await send_message_with_flood_control(
+        entity=event.chat_id,
+        message=f"❌ Status error: {str(e)}",
+        event=event
+    )
         @client.on(events.NewMessage(pattern=r'^/loadjson'))
 async def loadjson_handler(event):
     sender = await event.get_sender()
