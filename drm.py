@@ -1721,7 +1721,9 @@ class MPDLeechBot:
         ext = os.path.splitext(input_file)[1]
         chunks = []
 
-        num_chunks = (file_size + chunk_size - 1) // chunk_size
+        # Ensure chunk_size is integer and calculate num_chunks as integer
+        chunk_size = int(chunk_size)
+        num_chunks = int((file_size + chunk_size - 1) // chunk_size)
 
         with open(input_file, 'rb') as src:
             for i in range(num_chunks):
@@ -1758,7 +1760,9 @@ class MPDLeechBot:
         ext = os.path.splitext(input_file)[1]
         chunks = []
 
-        num_chunks = (file_size + chunk_size - 1) // chunk_size
+        # Ensure chunk_size is integer and calculate num_chunks as integer
+        chunk_size = int(chunk_size)
+        num_chunks = int((file_size + chunk_size - 1) // chunk_size)
 
         with open(input_file, 'rb') as src:
             for i in range(num_chunks):
