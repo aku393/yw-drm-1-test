@@ -2497,7 +2497,7 @@ async def json_data_handler(event):
         json_data = None
 
         # Handle JSON file upload
-                if event.document and event.document.mime_type == 'application/json':
+        if event.document and event.document.mime_type == 'application/json':
             logging.info(f"JSON file uploaded by user {sender.id}")
 
             file_path = await event.download_media()
