@@ -413,7 +413,7 @@ async def generate_random_thumbnail(output_path):
     except Exception as e:
         logging.error(f"Error generating random thumbnail: {str(e)}")
         return False
-    async def extract_video_frame_thumbnail(video_path, output_path, duration=None):
+async def extract_video_frame_thumbnail(video_path, output_path, duration=None):
     """Extract a random frame from video as thumbnail"""
     try:
         import random
