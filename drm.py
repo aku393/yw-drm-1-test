@@ -1437,8 +1437,12 @@ class MPDLeechBot:
                     if total_parts <= 0:
                         raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts}")
 
-                    logging.info(f"Chunk {i+1}: Size={format_size(chunk_size)}, Parts={total_parts}, "
-                    f"Last part={last_part_size} bytes")
+                    # 🔎 Debug: show exact sizes/parts Telegram will see
+                    logging.info(
+                    f"[UPLOAD DEBUG] Chunk {i+1}/{total_chunks} | "
+                    f"Size={chunk_size} bytes | Part size={part_size} bytes | "
+                    f"Total parts={total_parts} | Last part size={last_part_size} bytes"
+                    )
 
                     # Optimize concurrency based on file size and network conditions
                     if chunk_size > 1024 * 1024 * 1024:  # > 1GB chunks
