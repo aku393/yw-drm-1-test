@@ -1842,7 +1842,7 @@ async def start_handler(event):
 
     welcome_message = (
         "✨ ————  𝚉𝚎𝚛𝚘𝚃𝚛𝚊𝚌𝚎 𝙻𝚎𝚎𝚌𝚑 𝙱𝚘𝚝  ———— ✨\n\n"
-        "Hello! I'm your ultra-fast Telegram leech bot. Here's what I can do for you:\n\n"
+        "Hello! I'm your ultra-fast Telegram DRM leech bot. Here's what I can do for you:\n\n"
         "📥  𝗟𝗲𝗲𝗰𝗵 (DRM/Direct)\n"
         "   • /leech\n"
         "   • `<mpd_url>|<key>|<name>`\n"
