@@ -2977,60 +2977,60 @@ async def perform_internet_speed_test():
     max_test_time = 10
 
     # Download test
-    download_speed = download_bytes = download_time = None
-    for url in download_urls:
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': '*/*',
-                'Connection': 'keep-alive'
-            }
-            timeout = aiohttp.ClientTimeout(total=max_test_time + 5)
-            
-            start_time = time.time()
-            downloaded = 0
-            
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url.strip(), headers=headers) as response:  # Added .strip() to URL
-                    if response.status != 200:
-                        continue
-                    
-                    async for chunk in response.content.iter_chunked(4 * 1024 * 1024):
-                        downloaded += len(chunk)
-                        elapsed = time.time() - start_time
-                        if elapsed >= max_test_time or downloaded >= test_size:
-                            break
-            
-            elapsed = time.time() - start_time
-            if elapsed > 0 and downloaded > 1024 * 1024:
-                download_speed = downloaded / elapsed
-                download_bytes = downloaded
-                download_time = elapsed
-                break
-        except Exception as e:
-            logging.warning(f"Download test failed for {url}: {e}")
-            continue
-
-    # Upload test
-    upload_speed = upload_bytes = upload_time = None
+download_speed = download_bytes = download_time = None
+for url in download_urls:
     try:
-        upload_data = b'0' * (10 * 1024 * 1024)  # 10MB
-        url = "https://httpbin.org/post"
-        headers = {'User-Agent': 'SpeedTest/1.0', 'Content-Type': 'application/octet-stream'}
-        timeout = aiohttp.ClientTimeout(total=max_test_time)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': '*/*',
+            'Connection': 'keep-alive'
+        }
+        timeout = aiohttp.ClientTimeout(total=max_test_time + 5)
         
         start_time = time.time()
+        downloaded = 0
+        
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, data=upload_data, headers=headers) as response:
-                elapsed = time.time() - start_time
-                if elapsed > 0:
-                    upload_speed = len(upload_data) / elapsed
-                    upload_bytes = len(upload_data)
-                    upload_time = elapsed
+            async with session.get(url.strip(), headers=headers) as response:
+                if response.status != 200:
+                    continue
+                
+                async for chunk in response.content.iter_chunked(4 * 1024 * 1024):
+                    downloaded += len(chunk)
+                    elapsed = time.time() - start_time
+                    if elapsed >= max_test_time or downloaded >= test_size:
+                        break
+        
+        elapsed = time.time() - start_time
+        if elapsed > 0 and downloaded > 1024 * 1024:
+            download_speed = downloaded / elapsed
+            download_bytes = downloaded
+            download_time = elapsed
+            break
     except Exception as e:
-        logging.warning(f"Upload test failed: {e}")
+        logging.warning(f"Download test failed for {url}: {e}")
+        continue
 
-    return download_speed, download_bytes, download_time, upload_speed, upload_bytes, upload_time
+# Upload test
+upload_speed = upload_bytes = upload_time = None
+try:
+    upload_data = b'0' * (10 * 1024 * 1024)  # 10MB
+    url = "https://httpbin.org/post"
+    headers = {'User-Agent': 'SpeedTest/1.0', 'Content-Type': 'application/octet-stream'}
+    timeout = aiohttp.ClientTimeout(total=max_test_time)
+    
+    start_time = time.time()
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(url, data=upload_data, headers=headers) as response:
+            elapsed = time.time() - start_time
+            if elapsed > 0:
+                upload_speed = len(upload_data) / elapsed
+                upload_bytes = len(upload_data)
+                upload_time = elapsed
+except Exception as e:
+    logging.warning(f"Upload test failed: {e}")
+
+return download_speed, download_bytes, download_time, upload_speed, upload_bytes, upload_time
 
 @client.on(events.NewMessage(pattern=r'^/speed$'))
 async def speed_handler(event):
@@ -3155,10 +3155,6 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except Key
-    if __name__ == "__main__":
-    try:
-        asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("🛑 Bot stopped by user (Ctrl+C)")
     except Exception as e:
@@ -3166,8 +3162,7 @@ if __name__ == "__main__":
     finally:
         logging.info("🔌 Bot shutdown complete")
 
-# Additional utility functions for advanced features
-
+# Additional utility functions
 def get_file_hash(filepath, algorithm='md5'):
     """Generate file hash for integrity checking"""
     import hashlib
@@ -3182,58 +3177,50 @@ def get_file_hash(filepath, algorithm='md5'):
         return None
 
 async def verify_upload_integrity(original_path, uploaded_message):
-    """Verify uploaded file integrity (if possible)"""
+    """Verify uploaded file integrity"""
     try:
         if not os.path.exists(original_path):
-            return True  # File already cleaned up, assume success
+            return True
             
         original_size = os.path.getsize(original_path)
         
-        # For now, just check if the message was sent successfully
-        # Future enhancement: download and compare hashes
         if uploaded_message and uploaded_message.id:
             logging.info(f"Upload integrity check passed - Message ID: {uploaded_message.id}")
             return True
         return False
     except Exception as e:
         logging.warning(f"Upload integrity check failed: {e}")
-        return True  # Don't fail the upload for integrity check issues
+        return True
 
 def estimate_processing_time(file_size, operation_type='download'):
-    """Estimate processing time based on file size and operation"""
-    # Base speeds (conservative estimates)
+    """Estimate processing time"""
     base_speeds = {
-        'download': 50 * 1024 * 1024,  # 50 MB/s
-        'upload': 30 * 1024 * 1024,    # 30 MB/s
-        'decrypt': 100 * 1024 * 1024,  # 100 MB/s
-        'split': 200 * 1024 * 1024,    # 200 MB/s (stream copy)
+        'download': 50 * 1024 * 1024,
+        'upload': 30 * 1024 * 1024,
+        'decrypt': 100 * 1024 * 1024,
+        'split': 200 * 1024 * 1024,
     }
     
     speed = base_speeds.get(operation_type, 50 * 1024 * 1024)
     estimated_time = file_size / speed
-    
-    return max(estimated_time, 5)  # Minimum 5 seconds
+    return max(estimated_time, 5)
 
 def format_eta(seconds):
-    """Format ETA in a user-friendly way"""
+    """Format ETA"""
     if seconds < 60:
         return f"~{int(seconds)}s"
     elif seconds < 3600:
-        minutes = int(seconds / 60)
-        return f"~{minutes}m"
+        return f"~{int(seconds/60)}m"
     else:
-        hours = int(seconds / 3600)
-        minutes = int((seconds % 3600) / 60)
-        return f"~{hours}h{minutes}m"
+        return f"~{int(seconds/3600)}h{int((seconds%3600)/60)}m"
 
 async def cleanup_old_files_periodic():
-    """Periodic cleanup task to manage disk space"""
+    """Periodic cleanup task"""
     while True:
         try:
-            await asyncio.sleep(3600)  # Run every hour
-            
+            await asyncio.sleep(3600)
             current_time = time.time()
-            cutoff_age = 6 * 3600  # 6 hours
+            cutoff_age = 6 * 3600
             
             for user_id in os.listdir(DOWNLOAD_DIR):
                 if not user_id.startswith('user_'):
@@ -3243,10 +3230,8 @@ async def cleanup_old_files_periodic():
                 if not os.path.isdir(user_dir):
                     continue
                 
-                cleaned_files = 0
-                cleaned_size = 0
-                
-                for root, dirs, files in os.walk(user_dir):
+                cleaned_files = cleaned_size = 0
+                for root, _, files in os.walk(user_dir):
                     for file in files:
                         filepath = os.path.join(root, file)
                         try:
@@ -3261,51 +3246,41 @@ async def cleanup_old_files_periodic():
                             logging.warning(f"Failed to clean up {filepath}: {e}")
                 
                 if cleaned_files > 0:
-                    logging.info(f"Periodic cleanup: Removed {cleaned_files} files ({format_size(cleaned_size)}) for user {user_id}")
+                    logging.info(f"Cleaned {cleaned_files} files ({format_size(cleaned_size)}) for user {user_id}")
                     
         except Exception as e:
-            logging.error(f"Periodic cleanup error: {e}")
-            await asyncio.sleep(1800)  # Wait 30 minutes on error
+            logging.error(f"Cleanup error: {e}")
+            await asyncio.sleep(1800)
 
-# Start periodic cleanup task
 asyncio.create_task(cleanup_old_files_periodic())
 
-# Memory optimization helpers
 def optimize_memory_usage():
-    """Optimize memory usage and garbage collection"""
+    """Optimize memory usage"""
     import gc
     try:
-        # Force garbage collection
         collected = gc.collect()
-        
-        # Get memory info if available
         try:
             import psutil
             process = psutil.Process()
-            memory_info = process.memory_info()
-            memory_mb = memory_info.rss / 1024 / 1024
+            memory_mb = process.memory_info().rss / 1024 / 1024
             logging.debug(f"Memory usage: {memory_mb:.1f}MB, GC collected: {collected} objects")
         except ImportError:
             logging.debug(f"GC collected: {collected} objects")
-            
     except Exception as e:
         logging.warning(f"Memory optimization failed: {e}")
 
-# Performance monitoring
 class PerformanceMonitor:
     def __init__(self):
         self.start_times = {}
         self.operation_stats = {}
     
     def start_operation(self, operation_id, operation_type):
-        """Start timing an operation"""
         self.start_times[operation_id] = {
             'start_time': time.time(),
             'type': operation_type
         }
     
     def end_operation(self, operation_id, bytes_processed=0):
-        """End timing an operation and record stats"""
         if operation_id not in self.start_times:
             return
         
@@ -3325,7 +3300,6 @@ class PerformanceMonitor:
         stats['total_bytes'] += bytes_processed
         stats['operations'] += 1
         
-        # Calculate average speed
         if stats['total_time'] > 0:
             avg_speed = stats['total_bytes'] / stats['total_time']
             logging.debug(f"Operation {operation_type}: {format_time(elapsed)}, Avg speed: {format_size(avg_speed)}/s")
@@ -3333,26 +3307,19 @@ class PerformanceMonitor:
         del self.start_times[operation_id]
     
     def get_stats(self):
-        """Get performance statistics"""
         return self.operation_stats.copy()
 
-# Global performance monitor
 perf_monitor = PerformanceMonitor()
 
-# Enhanced error reporting
 def format_error_report(error, context="Unknown"):
-    """Format detailed error report for debugging"""
+    """Format error report"""
     import traceback
     import sys
     
     error_type = type(error).__name__
     error_msg = str(error)
-    
-    # Get stack trace
     tb_lines = traceback.format_exception(type(error), error, error.__traceback__)
     stack_trace = ''.join(tb_lines)
-    
-    # Get system info
     python_version = sys.version.split()[0]
     
     report = f"""
@@ -3370,22 +3337,18 @@ def format_error_report(error, context="Unknown"):
 """
     return report
 
-# Configuration validation
 def validate_configuration():
-    """Validate bot configuration and environment"""
+    """Validate configuration"""
     issues = []
     
-    # Check required environment variables
     required_vars = ['API_ID', 'API_HASH', 'ALLOWED_USERS']
     for var in required_vars:
         if not os.getenv(var):
             issues.append(f"Missing required environment variable: {var}")
     
-    # Check authentication
     if not SESSION_STRING and not BOT_TOKEN:
         issues.append("Either SESSION_STRING or BOT_TOKEN must be provided")
     
-    # Check download directory
     try:
         os.makedirs(DOWNLOAD_DIR, exist_ok=True)
         test_file = os.path.join(DOWNLOAD_DIR, '.test')
@@ -3395,20 +3358,17 @@ def validate_configuration():
     except Exception as e:
         issues.append(f"Download directory not writable: {DOWNLOAD_DIR} - {e}")
     
-    # Check disk space
     try:
         import shutil
         free_space = shutil.disk_usage(DOWNLOAD_DIR).free
-        if free_space < 1024 * 1024 * 1024:  # Less than 1GB
+        if free_space < 1024 * 1024 * 1024:
             issues.append(f"Low disk space: {format_size(free_space)} available")
     except Exception as e:
         issues.append(f"Could not check disk space: {e}")
     
-    # Check mp4decrypt
     if not os.path.exists(MP4DECRYPT_PATH):
         issues.append(f"mp4decrypt not found at: {MP4DECRYPT_PATH}")
     
-    # Check required tools
     required_tools = ['ffmpeg', 'ffprobe']
     for tool in required_tools:
         try:
@@ -3427,7 +3387,6 @@ def validate_configuration():
         logging.info("✅ Configuration validation passed")
         return True
 
-# Run configuration validation at startup
 if not validate_configuration():
     logging.error("🛑 Bot cannot start due to configuration issues")
     sys.exit(1)
@@ -3435,5 +3394,3 @@ if not validate_configuration():
 logging.info("🚀 ZeroTrace Leech Bot - Optimized for maximum performance")
 logging.info("🔧 Features: DRM decryption, 4GB+ uploads, concurrent processing")
 logging.info("⚡ Ready for high-speed leeching!")
-
-# End of optimized DRM bot code
