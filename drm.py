@@ -2977,39 +2977,39 @@ async def perform_internet_speed_test():
     max_test_time = 10
 
    # Download test
-download_speed = download_bytes = download_time = None
-for url in download_urls:
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': '*/*',
-            'Connection': 'keep-alive'
-        }
-        timeout = aiohttp.ClientTimeout(total=max_test_time + 5)
-        
-        start_time = time.time()
-        downloaded = 0
-        
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url.strip(), headers=headers) as response:
-                if response.status != 200:
-                    continue
-                
-                async for chunk in response.content.iter_chunked(4 * 1024 * 1024):
-                    downloaded += len(chunk)
-                    elapsed = time.time() - start_time
-                    if elapsed >= max_test_time or downloaded >= test_size:
-                        break
-        
-        elapsed = time.time() - start_time
-        if elapsed > 0 and downloaded > 1024 * 1024:
-            download_speed = downloaded / elapsed
-            download_bytes = downloaded
-            download_time = elapsed
-            break
-    except Exception as e:
-        logging.warning(f"Download test failed for {url}: {e}")
-        continue
+    download_speed = download_bytes = download_time = None
+    for url in download_urls:
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': '*/*',
+                'Connection': 'keep-alive'
+            }
+            timeout = aiohttp.ClientTimeout(total=max_test_time + 5)
+
+            start_time = time.time()
+            downloaded = 0
+
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url.strip(), headers=headers) as response:
+                    if response.status != 200:
+                        continue
+
+                    async for chunk in response.content.iter_chunked(4 * 1024 * 1024):
+                        downloaded += len(chunk)
+                        elapsed = time.time() - start_time
+                        if elapsed >= max_test_time or downloaded >= test_size:
+                            break
+
+            elapsed = time.time() - start_time
+            if elapsed > 0 and downloaded > 1024 * 1024:
+                download_speed = downloaded / elapsed
+                download_bytes = downloaded
+                download_time = elapsed
+                break
+        except Exception as e:
+            logging.warning(f"Download test failed for {url}: {e}")
+            continue
 
 # Upload test
 upload_speed = upload_bytes = upload_time = None
