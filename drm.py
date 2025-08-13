@@ -1421,7 +1421,7 @@ class MPDLeechBot:
                     # Final sanity check for last part size
                     last_part_size = chunk_size - (part_size * (total_parts - 1))
                     if last_part_size <= 0 or last_part_size > part_size:
-                    raise ValueError(f"Invalid last part size: {last_part_size} bytes for chunk {i+1}")
+                        raise ValueError(f"Invalid last part size: {last_part_size} bytes for chunk {i+1}")
                     
                     # Validate parameters
                     if total_parts <= 0:
