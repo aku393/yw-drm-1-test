@@ -805,19 +805,16 @@ class MPDLeechBot:
             duration = (file_size * 8) / estimated_bitrate  # Convert to seconds
             logging.warning(f"Could not determine duration for {input_file}, estimated {duration:.1f}s based on file size")
 
-        # Calculate number of chunks needed
-        num_chunks = max(1, int((file_size + max_size - 1) / max_size))  # Ceiling division
-        chunk_duration = duration / num_chunks
+       # Calculate number of chunks needed
+         num_chunks = max(1, int((file_size + max_size - 1) / max_size))  # Ceiling division
+         chunk_duration = duration / num_chunks
 
-        ## Force splitting based on size, ignore duration constraints
-        return await self._split_by_size_only(input_file, num_chunks, ext, base_name, cancel_event, progress_cb)
+# Ensure reasonable chunk duration (minimum 30 seconds, maximum 1 hour for very large files)
+# chunk_duration = max(30, min(chunk_duration, 3600))
 
-        # Ensure reasonable chunk duration (minimum 30 seconds, maximum 1 hour for very large files)
-        #chunk_duration = max(30, min(chunk_duration, 3600))
-
-        # Recalculate number of chunks based on duration constraints
-        #if chunk_duration < duration / num_chunks:
-        #num_chunks = max(1, int(duration / chunk_duration))
+# Recalculate number of chunks based on duration constraints
+# if chunk_duration < duration / num_chunks:
+#     num_chunks = max(1, int(duration / chunk_duration))
 
         logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts, each ~{chunk_duration:.1f}s ({format_size(file_size/num_chunks)} avg)")
 
