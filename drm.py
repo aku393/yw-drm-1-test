@@ -3012,26 +3012,29 @@ async def perform_internet_speed_test():
             continue
 
 # Upload test
-upload_speed = upload_bytes = upload_time = None
-try:
-    upload_data = b'0' * (10 * 1024 * 1024)  # 10MB
-    url = "https://httpbin.org/post"
-    headers = {'User-Agent': 'SpeedTest/1.0', 'Content-Type': 'application/octet-stream'}
-    timeout = aiohttp.ClientTimeout(total=max_test_time)
-    
-    start_time = time.time()
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(url, data=upload_data, headers=headers) as response:
-            await response.read()  # Ensure upload completes before measuring time
-            elapsed = time.time() - start_time
-            if elapsed > 0:
-                upload_speed = len(upload_data) / elapsed
-                upload_bytes = len(upload_data)
-                upload_time = elapsed
-except Exception as e:
-    logging.warning(f"Upload test failed: {e}")
+    upload_speed = upload_bytes = upload_time = None
+    try:
+        upload_data = b'0' * (10 * 1024 * 1024)  # 10MB
+        url = "https://httpbin.org/post"
+        headers = {
+            'User-Agent': 'SpeedTest/1.0',
+            'Content-Type': 'application/octet-stream'
+        }
+        timeout = aiohttp.ClientTimeout(total=max_test_time)
 
-return download_speed, download_bytes, download_time, upload_speed, upload_bytes, upload_time
+        start_time = time.time()
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, data=upload_data, headers=headers) as response:
+                await response.read()  # Ensure upload completes before measuring time
+                elapsed = time.time() - start_time
+                if elapsed > 0:
+                    upload_speed = len(upload_data) / elapsed
+                    upload_bytes = len(upload_data)
+                    upload_time = elapsed
+    except Exception as e:
+        logging.warning(f"Upload test failed: {e}")
+
+    return download_speed, download_bytes, download_time, upload_speed, upload_bytes, upload_time
 
 @client.on(events.NewMessage(pattern=r'^/speed$'))
 async def speed_handler(event):
