@@ -933,7 +933,7 @@ async def split_file(self, input_file, max_size_mb=None, progress_cb=None, cance
         logging.info(f"File splitting completed: {len(chunks)} chunks created")
         return chunks
 
-    async def download_and_decrypt(self, event, mpd_url, key, name, sender):
+async def download_and_decrypt(self, event, mpd_url, key, name, sender):
         """Optimized DRM download and decryption process"""
         if self.is_downloading:
             logging.info(f"Another download is already in progress for user {self.user_id}")
