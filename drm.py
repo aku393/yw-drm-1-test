@@ -839,7 +839,7 @@ class MPDLeechBot:
         except Exception as e:
             logging.error(f"mp4decrypt error: {str(e)}")
             raise
-        async def split_file(self, input_file, max_size_mb=None, progress_cb=None, cancel_event: asyncio.Event = None):
+async def split_file(self, input_file, max_size_mb=None, progress_cb=None, cancel_event: asyncio.Event = None):
         """Optimized file splitting with proper size limits based on session type"""
         if max_size_mb is None:
             # Use session-appropriate chunk size
