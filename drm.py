@@ -829,36 +829,36 @@ class MPDLeechBot:
             if file_size_gb >= 7.0:
                 # For 7GB+ files, split into safe chunks (2.9GB max)
                 safe_chunk_size = int(2.9 * 1024 * 1024 * 1024)  # 2.9GB chunks
-                num_chunks = int((file_size + safe_chunk_size - 1) / safe_chunk_size)
+                num_chunks = int((file_size + safe_chunk_size - 1) // safe_chunk_size)
                 chunk_sizes = [safe_chunk_size] * (num_chunks - 1)
                 # Last chunk gets the remainder
-                remainder = file_size - (safe_chunk_size * (num_chunks - 1))
+                remainder = int(file_size - (safe_chunk_size * (num_chunks - 1)))
                 chunk_sizes.append(remainder)
             else:
                 # For smaller files, use equal splitting with safe size
-                num_chunks = max(1, int((file_size + safe_premium_size - 1) / safe_premium_size))
-                target_chunk_size = file_size // num_chunks
+                num_chunks = max(1, int((file_size + safe_premium_size - 1) // safe_premium_size))
+                target_chunk_size = int(file_size // num_chunks)
                 chunk_sizes = [target_chunk_size] * num_chunks
                 # Adjust last chunk for remainder
-                remainder = file_size - (target_chunk_size * (num_chunks - 1))
+                remainder = int(file_size - (target_chunk_size * (num_chunks - 1)))
                 chunk_sizes[-1] = remainder
         else:  # Free user
             # Use smaller chunks for free users to ensure uploadability
             safe_free_size = min(max_size, telegram_max_chunk_size)
             if file_size_gb >= 3.8:  # For files 3.8GB+, split into safe chunks
                 safe_chunk_size = int(1.9 * 1024 * 1024 * 1024)  # 1.9GB chunks (safe for upload)
-                num_chunks = int((file_size + safe_chunk_size - 1) / safe_chunk_size)
+                num_chunks = int((file_size + safe_chunk_size - 1) // safe_chunk_size)
                 chunk_sizes = [safe_chunk_size] * (num_chunks - 1)
                 # Last chunk gets the remainder
-                remainder = file_size - (safe_chunk_size * (num_chunks - 1))
+                remainder = int(file_size - (safe_chunk_size * (num_chunks - 1)))
                 chunk_sizes.append(remainder)
             else:
                 # For smaller files, use equal splitting with safe size
-                num_chunks = max(1, int((file_size + safe_free_size - 1) / safe_free_size))
-                target_chunk_size = file_size // num_chunks
+                num_chunks = max(1, int((file_size + safe_free_size - 1) // safe_free_size))
+                target_chunk_size = int(file_size // num_chunks)
                 chunk_sizes = [target_chunk_size] * num_chunks
                 # Adjust last chunk for remainder
-                remainder = file_size - (target_chunk_size * (num_chunks - 1))
+                remainder = int(file_size - (target_chunk_size * (num_chunks - 1)))
                 chunk_sizes[-1] = remainder
 
         # Final validation: ensure no chunk exceeds Telegram's upload limit
@@ -1410,16 +1410,6 @@ class MPDLeechBot:
             self.progress_state['speed'] = 0
             self.progress_state['elapsed'] = 0
 
-            # Update status message
-            await send_message_with_flood_control(
-                entity=event.chat_id,
-                message=f"📤 **Uploading to Log Channel**\n\n"
-                       f"📁 {os.path.basename(filepath)}\n"
-                       f"📊 Size: {format_size(file_size)}\n"
-                       f"⏳ Please wait...",
-                edit_message=status_msg
-            )
-
             # Prepare thumbnail
             thumbnail_file = None
             async with thumbnail_lock:
@@ -1436,27 +1426,99 @@ class MPDLeechBot:
 
             # Check if file is too large and needs splitting
             max_telegram_size = 2 * 1024 * 1024 * 1024  # 2GB limit for Telegram
-            
+
             if file_size > max_telegram_size:
-                # Split file for large files
+                # Large file - show splitting progress first
+                self.progress_state['stage'] = "Splitting"
                 await send_message_with_flood_control(
                     entity=event.chat_id,
-                    message=f"📁 **Large File Detected**\n\n"
+                    message=f"✂️ **Splitting Large File**\n\n"
+                           f"📁 {os.path.basename(filepath)}\n"
                            f"📊 Size: {format_size(file_size)}\n"
-                           f"✂️ Splitting into parts for upload...",
+                           f"✂️ Creating upload parts...",
                     edit_message=status_msg
                 )
 
-                # Simple file splitting
+                # Simple file splitting with progress callback
                 chunk_size = 1.8 * 1024 * 1024 * 1024  # 1.8GB chunks
-                chunks = await self.split_file_simple(filepath, chunk_size)
-                
+
+                async def splitting_progress(current_part, total_parts, part_progress):
+                    self.progress_state['percent'] = ((current_part / total_parts) * 100) + (part_progress / total_parts)
+                    self.progress_state['elapsed'] = time.time() - self.progress_state['start_time']
+
+                    display = progress_display(
+                        self.progress_state['stage'],
+                        self.progress_state['percent'],
+                        0,  # No byte progress for splitting
+                        file_size,
+                        0,  # No speed for splitting
+                        self.progress_state['elapsed'],
+                        sender.first_name,
+                        sender.id,
+                        os.path.basename(filepath)
+                    )
+
+                    await send_message_with_flood_control(
+                        entity=event.chat_id,
+                        message=display,
+                        edit_message=status_msg
+                    )
+
+                chunks = await self.split_file_simple_with_progress(filepath, chunk_size, splitting_progress)
+
+                # Now upload each chunk with detailed progress
+                self.progress_state['stage'] = "Uploading"
+                self.progress_state['percent'] = 0.0
+                self.progress_state['done_size'] = 0
+                self.progress_state['start_time'] = time.time()  # Reset timer for upload
+
+                # Start upload progress updater
+                last_update_time = 0
+                upload_active = True
+
+                async def update_upload_progress():
+                    nonlocal last_update_time, status_msg
+                    while upload_active and self.progress_state['stage'] == "Uploading":
+                        current_time = time.time()
+                        if current_time - last_update_time < 3:
+                            await asyncio.sleep(0.2)
+                            continue
+
+                        self.progress_state['elapsed'] = current_time - self.progress_state['start_time']
+                        self.progress_state['speed'] = (self.progress_state['done_size'] / self.progress_state['elapsed']) if self.progress_state['elapsed'] > 0 else 0
+
+                        display = progress_display(
+                            self.progress_state['stage'],
+                            self.progress_state['percent'],
+                            self.progress_state['done_size'],
+                            self.progress_state['total_size'],
+                            self.progress_state['speed'],
+                            self.progress_state['elapsed'],
+                            sender.first_name,
+                            sender.id,
+                            os.path.basename(filepath)
+                        )
+
+                        status_msg = await send_message_with_flood_control(
+                            entity=event.chat_id,
+                            message=display,
+                            edit_message=status_msg
+                        )
+                        last_update_time = current_time
+                        await asyncio.sleep(3)
+
+                # Start progress updater task
+                progress_task = asyncio.create_task(update_upload_progress())
+
                 uploaded_messages = []
                 for i, chunk in enumerate(chunks):
                     try:
+                        chunk_start_time = time.time()
+                        chunk_size_bytes = os.path.getsize(chunk)
+
                         # Upload each chunk to log channel
                         chunk_caption = f"Part {i+1}/{len(chunks)}: {os.path.basename(filepath)}"
-                        
+
                         if thumbnail_file and os.path.exists(thumbnail_file):
                             log_msg = await client.send_file(
                                 LOG_CHANNEL_ID,
@@ -1474,28 +1536,38 @@ class MPDLeechBot:
                                 attributes=[DocumentAttributeVideo(duration=duration//len(chunks), w=1280, h=720, supports_streaming=True)],
                                 force_document=False
                             )
-                        
+
                         uploaded_messages.append(log_msg)
-                        
-                        # Update progress
-                        self.progress_state['done_size'] = (i + 1) * os.path.getsize(chunk)
-                        self.progress_state['percent'] = ((i + 1) / len(chunks)) * 100
-                        
-                        await send_message_with_flood_control(
-                            entity=event.chat_id,
-                            message=f"📤 **Uploading Part {i+1}/{len(chunks)}**\n\n"
-                                   f"📁 {os.path.basename(filepath)}\n"
-                                   f"📊 Progress: {self.progress_state['percent']:.1f}%\n"
-                                   f"⏳ Please wait...",
-                            edit_message=status_msg
-                        )
-                        
+
+                        # Update progress after each chunk
+                        self.progress_state['done_size'] += chunk_size_bytes
+                        self.progress_state['percent'] = (self.progress_state['done_size'] / file_size) * 100
+
+                        # Update upload speed statistics
+                        chunk_elapsed = time.time() - chunk_start_time
+                        chunk_speed = chunk_size_bytes / chunk_elapsed if chunk_elapsed > 0 else 0
+                        async with speed_lock:
+                            if self.user_id not in user_speed_stats:
+                                user_speed_stats[self.user_id] = {}
+                            user_speed_stats[self.user_id]['upload_speed'] = chunk_speed
+                            user_speed_stats[self.user_id]['last_updated'] = time.time()
+
                         # Clean up chunk
                         os.remove(chunk)
-                        
+
                     except Exception as e:
                         logging.error(f"Failed to upload chunk {i+1}: {e}")
+                        upload_active = False
+                        progress_task.cancel()
                         raise Exception(f"Failed to upload part {i+1}: {str(e)}")
+
+                # Stop progress updater
+                upload_active = False
+                progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
 
                 # Forward all parts to user
                 for i, log_msg in enumerate(uploaded_messages):
@@ -1503,7 +1575,52 @@ class MPDLeechBot:
                     await asyncio.sleep(1)  # Small delay between forwards
 
             else:
-                # Single file upload for smaller files
+                # Single file upload with detailed progress
+                upload_start_time = time.time()
+                last_update_time = 0
+                upload_active = True
+
+                # Start upload progress updater for single file
+                async def update_single_upload_progress():
+                    nonlocal last_update_time, status_msg
+                    while upload_active and self.progress_state['stage'] == "Uploading":
+                        current_time = time.time()
+                        if current_time - last_update_time < 3:
+                            await asyncio.sleep(0.2)
+                            continue
+
+                        # Estimate progress during upload (Telegram doesn't provide real-time progress)
+                        elapsed = current_time - upload_start_time
+                        # Use a simple time-based estimation for single file uploads
+                        estimated_progress = min(95, (elapsed / max(elapsed * 0.1, 1)) * 100)  # Cap at 95% until complete
+                        self.progress_state['percent'] = estimated_progress
+                        self.progress_state['elapsed'] = elapsed
+                        self.progress_state['speed'] = (file_size * (estimated_progress / 100)) / elapsed if elapsed > 0 else 0
+                        self.progress_state['done_size'] = int(file_size * (estimated_progress / 100))
+
+                        display = progress_display(
+                            self.progress_state['stage'],
+                            self.progress_state['percent'],
+                            self.progress_state['done_size'],
+                            self.progress_state['total_size'],
+                            self.progress_state['speed'],
+                            self.progress_state['elapsed'],
+                            sender.first_name,
+                            sender.id,
+                            os.path.basename(filepath)
+                        )
+
+                        status_msg = await send_message_with_flood_control(
+                            entity=event.chat_id,
+                            message=display,
+                            edit_message=status_msg
+                        )
+                        last_update_time = current_time
+                        await asyncio.sleep(3)
+
+                # Start progress updater task
+                progress_task = asyncio.create_task(update_single_upload_progress())
+
                 try:
                     # Upload to log channel first
                     if thumbnail_file and os.path.exists(thumbnail_file):
@@ -1524,10 +1641,33 @@ class MPDLeechBot:
                             force_document=False
                         )
 
+                    # Upload completed - stop progress updater
+                    upload_active = False
+                    progress_task.cancel()
+                    try:
+                        await progress_task
+                    except asyncio.CancelledError:
+                        pass
+
+                    # Update final upload statistics
+                    total_upload_time = time.time() - upload_start_time
+                    final_upload_speed = file_size / total_upload_time if total_upload_time > 0 else 0
+                    async with speed_lock:
+                        if self.user_id not in user_speed_stats:
+                            user_speed_stats[self.user_id] = {}
+                        user_speed_stats[self.user_id]['upload_speed'] = final_upload_speed
+                        user_speed_stats[self.user_id]['last_updated'] = time.time()
+
                     # Forward to user
                     await client.forward_messages(event.chat_id, log_msg, LOG_CHANNEL_ID)
 
                 except Exception as upload_error:
+                    upload_active = False
+                    progress_task.cancel()
+                    try:
+                        await progress_task
+                    except asyncio.CancelledError:
+                        pass
                     logging.error(f"Single file upload failed: {upload_error}")
                     raise Exception(f"Upload failed: {str(upload_error)}")
 
@@ -1541,13 +1681,23 @@ class MPDLeechBot:
             # Update final status
             self.progress_state['stage'] = "Completed"
             self.progress_state['percent'] = 100.0
-            
+            self.progress_state['done_size'] = file_size
+
+            final_message = f"✅ **Upload Complete!**\n\n"
+            final_message += f"📁 {os.path.basename(filepath)}\n"
+            final_message += f"📊 Size: {format_size(file_size)}\n"
+
+            # Add upload speed info if available
+            async with speed_lock:
+                if self.user_id in user_speed_stats and 'upload_speed' in user_speed_stats[self.user_id]:
+                    upload_speed = user_speed_stats[self.user_id]['upload_speed']
+                    final_message += f"⚡ Upload Speed: {format_size(upload_speed)}/s\n"
+
+            final_message += f"🎉 File delivered successfully!"
+
             await send_message_with_flood_control(
                 entity=event.chat_id,
-                message=f"✅ **Upload Complete!**\n\n"
-                       f"📁 {os.path.basename(filepath)}\n"
-                       f"📊 Size: {format_size(file_size)}\n"
-                       f"🎉 File delivered successfully!",
+                message=final_message,
                 edit_message=status_msg
             )
 
@@ -1564,33 +1714,70 @@ class MPDLeechBot:
         finally:
             self.has_notified_split = False
 
-    async def split_file_simple(self, input_file, chunk_size):
-        """Simple file splitting for large files"""
+    async def split_file_simple_with_progress(self, input_file, chunk_size, progress_callback=None):
+        """Simple file splitting for large files with progress callback"""
         file_size = os.path.getsize(input_file)
         base_name = os.path.splitext(input_file)[0]
         ext = os.path.splitext(input_file)[1]
         chunks = []
-        
+
         num_chunks = (file_size + chunk_size - 1) // chunk_size
-        
+
         with open(input_file, 'rb') as src:
             for i in range(num_chunks):
+                if progress_callback:
+                    await progress_callback(i, num_chunks, 0.0)
+
                 chunk_filename = f"{base_name}_part{i+1:03d}{ext}"
-                
+
                 with open(chunk_filename, 'wb') as dst:
                     remaining = min(chunk_size, file_size - i * chunk_size)
                     copied = 0
-                    
+
                     while copied < remaining:
                         data = src.read(min(8192, remaining - copied))
                         if not data:
                             break
                         dst.write(data)
                         copied += len(data)
-                
+
+                        # Update progress within this part
+                        if progress_callback:
+                            part_progress = (copied / remaining) * 100
+                            await progress_callback(i, num_chunks, part_progress)
+
                 chunks.append(chunk_filename)
                 logging.info(f"Created chunk {i+1}/{num_chunks}: {os.path.basename(chunk_filename)}")
-        
+
+        return chunks
+
+    async def split_file_simple(self, input_file, chunk_size):
+        """Simple file splitting for large files"""
+        file_size = os.path.getsize(input_file)
+        base_name = os.path.splitext(input_file)[0]
+        ext = os.path.splitext(input_file)[1]
+        chunks = []
+
+        num_chunks = (file_size + chunk_size - 1) // chunk_size
+
+        with open(input_file, 'rb') as src:
+            for i in range(num_chunks):
+                chunk_filename = f"{base_name}_part{i+1:03d}{ext}"
+
+                with open(chunk_filename, 'wb') as dst:
+                    remaining = min(chunk_size, file_size - i * chunk_size)
+                    copied = 0
+
+                    while copied < remaining:
+                        data = src.read(min(8192, remaining - copied))
+                        if not data:
+                            break
+                        dst.write(data)
+                        copied += len(data)
+
+                chunks.append(chunk_filename)
+                logging.info(f"Created chunk {i+1}/{num_chunks}: {os.path.basename(chunk_filename)}")
+
         return chunks
 
     async def process_task(self, event, task_data, sender, starting_msg=None):
@@ -1812,7 +1999,7 @@ async def start_handler(event):
         "📥  𝗟𝗲𝗲𝗰𝗵 (DRM/Direct)\n"
         "   • /leech\n"
         "   • `<mpd_url>|<key>|<name>`\n"
-        "   • `<direct_url>|<name>` or `/leech <direct_url>`\n\n"
+        "   • `<direct_url>|<name>` or /leech <direct_url>\n\n"
         "⚡  𝗤𝘂𝗶𝗰𝗸 𝗠𝗣𝟰 𝗟𝗲𝗲𝗰𝗵\n"
         "   • /mplink `<direct_url>|<name>`\n\n"
         "📋  𝗝𝗦𝗢𝗡 𝗪𝗼𝗿𝗸𝗳𝗹𝗼𝘄\n"
