@@ -1856,7 +1856,7 @@ async def process_task(self, event, task_data, sender, starting_msg=None):
                     except Exception as e:
                         logging.warning(f"Cleanup failed for {file}: {e}")
 
-    async def process_queue(self, event):
+async def process_queue(self, event):
         """Process task queue with improved error handling"""
         user_queue, user_states, user_lock = get_user_resources(self.user_id)
         user_bot_instances[self.user_id] = self  # Register instance
