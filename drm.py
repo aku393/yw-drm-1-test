@@ -1340,7 +1340,7 @@ async def download_and_decrypt(self, event, mpd_url, key, name, sender):
             raise
         finally:
             self.is_downloading = False
-            async def upload_file(self, event, filepath, status_msg, total_size, sender, duration):
+async def upload_file(self, event, filepath, status_msg, total_size, sender, duration):
         """Optimized file upload with proper session handling and instant finalization"""
         try:
             file_size = os.path.getsize(filepath)
