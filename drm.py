@@ -29,6 +29,7 @@ import psutil
 from telethon.errors.rpcerrorlist import FloodWaitError  # Import FloodWaitError
 from collections import deque  # For task queue
 import json
+import math
 
 # Set up simple logging
 logging.basicConfig(
@@ -115,7 +116,7 @@ def setup_bento4():
             # Use a GitHub release URL for reliability
             bento4_urls = [
                 "https://github.com/axiomatic-systems/Bento4/releases/download/v1.6.0-641/Bento4-SDK-1.6.0-641-x86_64-unknown-linux.zip",
-                "https://www.bok.net/Bento4/binaries/Bento4-SDK-1-6-0-640.x86_64-unknown-linux.zip"  # Fallback URL
+                "https://www.bok.net/Bento4/binaries/Bento4-SDK-1-6-0-641.x86_64-unknown-linux.zip"  # Fallback URL
             ]
             zip_path = os.path.join(os.getcwd(), 'Bento4-SDK.zip')
             response = None
@@ -1412,8 +1413,12 @@ class MPDLeechBot:
 
                     # Custom parallel upload for each chunk with optimized settings
                     file_id = random.getrandbits(63)  # Generate a 63-bit file ID (0 to 2^63 - 1)
-                    part_size = 524288  # Exactly 512 KB (524288 bytes) - Telegram requirement
-                    total_parts = chunk_size // part_size
+                    part_size = 512 * 1024  # 512 KB
+                    total_parts = math.ceil(chunk_size / part_size)
+
+                    last_part_size = chunk_size - (part_size * (total_parts - 1))
+                    if last_part_size <= 0 or last_part_size > part_size:
+                        raise ValueError(f"Invalid last part size: {last_part_size} bytes for chunk {i+1}")
                     if chunk_size % part_size != 0:
                         total_parts += 1
 
