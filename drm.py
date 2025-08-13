@@ -1386,60 +1386,57 @@ class MPDLeechBot:
                         logging.error(f"Error in splitting progress callback: {e}")
 
                 # Split file with proper size limits
-chunks = await self.split_file(
-    filepath,
-    max_size_mb=max_size_mb,
-    progress_cb=splitting_progress,
-    cancel_event=self.abort_event
-)
+                chunks = await self.split_file(
+                    filepath,
+                    max_size_mb=max_size_mb,
+                    progress_cb=splitting_progress,
+                    cancel_event=self.abort_event
+                )
+                # Process each chunk with enhanced progress tracking
+                total_chunks = len(chunks)
+                for i, chunk in enumerate(chunks):
+                    chunk_size = os.path.getsize(chunk)
+                    chunk_duration = duration // len(chunks) if duration > 0 else 30
+                    progress = {'uploaded': 0}
+                    last_update_time = 0
+                    chunk_start_time = time.time()
 
-# Process each chunk with enhanced progress tracking
-total_chunks = len(chunks)
-for i, chunk in enumerate(chunks):
-    chunk_size = os.path.getsize(chunk)
-    chunk_duration = duration // len(chunks) if duration > 0 else 30
-    progress = {'uploaded': 0}
-    last_update_time = 0
-    chunk_start_time = time.time()
+                    # Update stage for current chunk
+                    self.progress_state['stage'] = "Uploading"
+                    self.progress_state['total_size'] = chunk_size
+                    self.progress_state['done_size'] = 0
+                    self.progress_state['percent'] = 0.0
+                    self.progress_state['start_time'] = chunk_start_time
 
-    # Update stage for current chunk
-    self.progress_state['stage'] = "Uploading"
-    self.progress_state['total_size'] = chunk_size
-    self.progress_state['done_size'] = 0
-    self.progress_state['percent'] = 0.0
-    self.progress_state['start_time'] = chunk_start_time
+                    chunk_info = f"Part {i+1}/{total_chunks} ({format_size(chunk_size)})"
+                    logging.info(f"Starting upload of {chunk_info} for user {sender.id}")
 
-    chunk_info = f"Part {i+1}/{total_chunks} ({format_size(chunk_size)})"
-    logging.info(f"Starting upload of {chunk_info} for user {sender.id}")
+                    # Custom parallel upload for each chunk with optimized settings
+                    file_id = random.getrandbits(63)  # Generate a 63-bit file ID (0 to 2^63 - 1)
+                    part_size = 512 * 1024  # Telegram requirement (512 KB exact)
+                    # Get actual chunk size from disk to avoid stale/mismatched sizes
+                    chunk_size = os.path.getsize(chunk)
+                    total_parts = math.ceil(chunk_size / part_size)
 
-    # Custom parallel upload for each chunk with optimized settings
-    file_id = random.getrandbits(63)  # Generate a 63-bit file ID (0 to 2^63 - 1)
-    part_size = 512 * 1024  # Telegram requirement (512 KB exact)
+                    # Final sanity check for last part size
+                    last_part_size = chunk_size - (part_size * (total_parts - 1))
+                    if last_part_size <= 0 or last_part_size > part_size:
+                    raise ValueError(f"Invalid last part size: {last_part_size} bytes for chunk {i+1}")
+                    
+                    # Validate parameters
+                    if total_parts <= 0:
+                        raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts}")
 
-    # Get actual chunk size from disk to avoid stale/mismatched sizes
-    chunk_size = os.path.getsize(chunk)
-    total_parts = math.ceil(chunk_size / part_size)
+                    logging.info(f"Chunk {i+1}: Size={format_size(chunk_size)}, Parts={total_parts}, "
+                    f"Last part={last_part_size} bytes")
 
-    # Final sanity check for last part size
-    last_part_size = chunk_size - (part_size * (total_parts - 1))
-    if last_part_size <= 0 or last_part_size > part_size:
-        raise ValueError(f"Invalid last part size: {last_part_size} bytes for chunk {i+1}")
-
-    # Validate parameters
-    if total_parts <= 0:
-        raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts}")
-
-    logging.info(f"Chunk {i+1}: Size={format_size(chunk_size)}, Parts={total_parts}, "
-                 f"Last part={last_part_size} bytes")
-
-    # Optimize concurrency based on file size and network conditions
-    if chunk_size > 1024 * 1024 * 1024:  # > 1GB chunks
-        max_concurrent = 3  # Lower concurrency for very large chunks
-    elif chunk_size > 500 * 1024 * 1024:  # > 500MB chunks
-        max_concurrent = 4
-    else:
-        max_concurrent = 6  # Higher for smaller chunks
-
+                    # Optimize concurrency based on file size and network conditions
+                    if chunk_size > 1024 * 1024 * 1024:  # > 1GB chunks
+                        max_concurrent = 3  # Lower concurrency for very large chunks
+                    elif chunk_size > 500 * 1024 * 1024:  # > 500MB chunks
+                        max_concurrent = 4
+                    else:
+                        max_concurrent = 6  # Higher for smaller chunks
 
                     semaphore = asyncio.Semaphore(max_concurrent)
                     logging.info(f"Chunk {i+1}/{len(chunks)}: {format_size(chunk_size)}, {total_parts} parts, {max_concurrent} concurrent, file_id: {file_id}")
