@@ -2461,6 +2461,7 @@ async def status_handler(event):
     except Exception as e:
     logging.error(f"Status error for user {sender.id}: {str(e)}")
     await send_message_with_flood_control(
+        # The rest of this function call should also be indented
         entity=event.chat_id,
         message=f"❌ Status error: {str(e)}",
         event=event
