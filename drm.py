@@ -1414,14 +1414,13 @@ class MPDLeechBot:
                     # Custom parallel upload for each chunk with optimized settings
                     file_id = random.getrandbits(63)  # Generate a 63-bit file ID (0 to 2^63 - 1)
                     part_size = 512 * 1024  # 512 KB
+                    chunk_size = os.path.getsize(chunk)  # actual bytes on disk
                     total_parts = math.ceil(chunk_size / part_size)
-
                     last_part_size = chunk_size - (part_size * (total_parts - 1))
+
                     if last_part_size <= 0 or last_part_size > part_size:
                         raise ValueError(f"Invalid last part size: {last_part_size} bytes for chunk {i+1}")
-                    if chunk_size % part_size != 0:
-                        total_parts += 1
-
+                    
                     # Validate parameters
                     if total_parts <= 0:
                         raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts}")
