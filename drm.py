@@ -806,8 +806,8 @@ class MPDLeechBot:
             logging.warning(f"Could not determine duration for {input_file}, estimated {duration:.1f}s based on file size")
 
        # Calculate number of chunks needed
-         num_chunks = max(1, int((file_size + max_size - 1) / max_size))  # Ceiling division
-         chunk_duration = duration / num_chunks
+        num_chunks = max(1, int((file_size + max_size - 1) / max_size))  # Ceiling division
+        chunk_duration = duration / num_chunks
 
 # Ensure reasonable chunk duration (minimum 30 seconds, maximum 1 hour for very large files)
 # chunk_duration = max(30, min(chunk_duration, 3600))
