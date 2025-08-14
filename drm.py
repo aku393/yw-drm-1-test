@@ -1470,13 +1470,21 @@ class MPDLeechBot:
                         part_size = 524288  # Exactly 512 KB (524288 bytes) - Telegram requirement
                         total_parts = (chunk_size + part_size - 1) // part_size
 
-                        # Validate parameters
+                        # Validate parameters more strictly
                         if total_parts <= 0:
                             raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts}")
+                        if total_parts > 4000:  # Telegram's maximum parts limit
+                            raise ValueError(f"Too many parts for chunk {i+1}: {total_parts} (max 4000)")
+                        if chunk_size == 0:
+                            raise ValueError(f"Empty chunk {i+1}")
 
                         # Calculate last part size and expected total size for logging
                         last_part_size = chunk_size - (total_parts - 1) * part_size if total_parts > 1 else chunk_size
                         expected_size = (total_parts - 1) * part_size + last_part_size
+
+                        # Additional validation
+                        if last_part_size <= 0:
+                            raise ValueError(f"Invalid last part size for chunk {i+1}: {last_part_size}")
 
                         # Maximum concurrency for ultra-fast uploads (same as download)
                         max_concurrent = 15  # High concurrency for maximum speed
@@ -1492,25 +1500,39 @@ class MPDLeechBot:
                                     try:
                                         # Use memory-mapped file for zero-copy reads
                                         with open(chunk_path, 'rb') as f:
+                                            file_size = os.path.getsize(chunk_path)
+                                            if file_size == 0:
+                                                return (part_num, False, "Empty file")
+                                            
                                             with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
                                                 start_pos = part_num * part_size
                                                 end_pos = min(start_pos + part_size, len(mm))
+                                                
+                                                # Ensure we don't read beyond file
+                                                if start_pos >= len(mm):
+                                                    return (part_num, False, "Start position beyond file")
+                                                
                                                 data = mm[start_pos:end_pos]
 
                                         if not data:
                                             logging.warning(f"No data for part {part_num}")
                                             return (part_num, False, "No data")
 
-                                        # Validate part parameters before API call
-                                        if part_num < 0 or part_num >= total_parts:
-                                            logging.error(f"Invalid part_num {part_num} for total_parts {total_parts}")
-                                            return (part_num, False, f"Invalid part number: {part_num}")
-
+                                        # Strict validation of part parameters
+                                        if part_num < 0:
+                                            return (part_num, False, f"Negative part number: {part_num}")
+                                        if part_num >= total_parts:
+                                            return (part_num, False, f"Part number {part_num} >= total_parts {total_parts}")
+                                        if total_parts <= 0:
+                                            return (part_num, False, f"Invalid total_parts: {total_parts}")
+                                        if total_parts > 4000:
+                                            return (part_num, False, f"Total parts {total_parts} exceeds Telegram limit of 4000")
                                         if len(data) > part_size:
-                                            logging.error(f"Part {part_num} data too large: {len(data)} > {part_size}")
-                                            return (part_num, False, f"Part data too large: {len(data)}")
+                                            return (part_num, False, f"Part data too large: {len(data)} > {part_size}")
+                                        if len(data) == 0:
+                                            return (part_num, False, "Empty part data")
 
-                                        # Telegram requires file_total_parts for all parts
+                                        # Use SaveBigFilePartRequest with proper parameters
                                         result = await client(SaveBigFilePartRequest(
                                             file_id=file_id,
                                             file_part=part_num,
@@ -1528,6 +1550,10 @@ class MPDLeechBot:
                                             return (part_num, False, "Upload returned False")
 
                                     except Exception as e:
+                                        error_msg = str(e)
+                                        if "invalid" in error_msg.lower() and "parts" in error_msg.lower():
+                                            logging.error(f"Part validation error for part {part_num}: total_parts={total_parts}, file_id={file_id}, data_len={len(data) if 'data' in locals() else 'unknown'}")
+                                        
                                         if attempt < retries - 1:
                                             logging.warning(f"Part {part_num} upload attempt {attempt + 1} failed: {e}, retrying...")
                                             await asyncio.sleep(0.5 * (attempt + 1))
