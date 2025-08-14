@@ -470,11 +470,21 @@ def progress_display(stage, percent, done, total, speed, elapsed, user, user_id,
         "Initializing": ("🟡", "Initializing"),
     }
     emoji, status_text = stage_info.get(stage, ("🚀", stage))
+    
+    # Convert speed to Mbps for display
+    speed_mbps = (speed * 8) / (1024 * 1024) if speed > 0 else 0
+    if speed_mbps >= 1:
+        speed_display = f"{speed_mbps:.1f} Mbps"
+    else:
+        # Show in KB/s for very slow speeds
+        speed_kbps = speed / 1024 if speed > 0 else 0
+        speed_display = f"{speed_kbps:.1f} KB/s"
+    
     return (
         f"{spinner} {filename}\n"
         f"{emoji} {status_text}\n"
         f"[{progress_bar}] {percent:.1f}%\n"
-        f"⚡ {format_size(speed)}/s | ⏱️ {format_time(elapsed)} | ⌛ {format_time(eta)}\n"
+        f"⚡ {speed_display} | ⏱️ {format_time(elapsed)} | ⌛ {format_time(eta)}\n"
         f"📦 {format_size(done)} / {format_size(total)}\n"
         f"👤 {user} | 🆔 {user_id}"
     )
@@ -742,7 +752,7 @@ class MPDLeechBot:
             raise
 
     async def split_file(self, input_file, max_size_mb=1900, progress_cb=None, cancel_event=None):
-        """Split large files based on size with progress tracking and proper cleanup"""
+        """Split large files based on size only with progress tracking and proper cleanup"""
         max_size = max_size_mb * 1024 * 1024  # 1.9GB = 1900MB
         file_size = os.path.getsize(input_file)
 
@@ -751,73 +761,26 @@ class MPDLeechBot:
             logging.info(f"File {input_file} ({format_size(file_size)}) is within {max_size_mb}MB limit, no splitting needed")
             return [input_file]
 
-        logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting into parts")
+        logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting into parts based on size")
 
         base_name = os.path.splitext(input_file)[0]
         ext = os.path.splitext(input_file)[1]
         chunks = []
 
-        # Get video duration for calculating target duration per chunk
-        duration = 0
-        duration_methods = [
-            ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', input_file],
-            ['ffprobe', '-v', 'quiet', '-show_entries', 'stream=duration', '-of', 'csv=p=0', input_file],
-        ]
-
-        for cmd in duration_methods:
-            try:
-                process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                stdout, stderr = await process.communicate()
-                if process.returncode == 0 and stdout.decode().strip():
-                    duration = float(stdout.decode().strip())
-                    if duration > 0:
-                        break
-            except:
-                continue
-
-        # Fallback duration detection
-        if duration <= 0:
-            try:
-                cmd = ['ffmpeg', '-i', input_file, '-f', 'null', '-', '-y']
-                process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                _, stderr = await process.communicate()
-                for line in stderr.decode().splitlines():
-                    if 'Duration' in line:
-                        time_str = line.split('Duration: ')[1].split(',')[0]
-                        try:
-                            h, m, s = map(float, time_str.split(':'))
-                            duration = h * 3600 + m * 60 + s
-                            break
-                        except:
-                            continue
-            except:
-                pass
-
-        # Calculate number of chunks based on file size
+        # Calculate number of chunks needed based on file size only
         num_chunks = max(1, int((file_size + max_size - 1) / max_size))  # Ceiling division
-        target_size_per_chunk = file_size / num_chunks
+        target_size_per_chunk = file_size // num_chunks  # Target size per chunk
         
-        # Calculate approximate duration per chunk if we have total duration
-        if duration > 0:
-            chunk_duration = duration / num_chunks
-            # Ensure minimum chunk duration of 30 seconds
-            chunk_duration = max(30, chunk_duration)
-        else:
-            # Fallback: estimate based on typical bitrates
-            estimated_bitrate = file_size * 8 / max(duration, 1) if duration > 0 else 5 * 1024 * 1024  # 5 Mbps default
-            chunk_duration = (target_size_per_chunk * 8) / estimated_bitrate
-            chunk_duration = max(30, min(chunk_duration, 3600))  # Between 30s and 1 hour
+        logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts, target size: {format_size(target_size_per_chunk)} per part")
 
-        logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts, target size: {format_size(target_size_per_chunk)} each, ~{chunk_duration:.1f}s per part")
-
-        current_time = 0
+        # Split file into equal byte-sized chunks
         for i in range(num_chunks):
             # Check for cancellation
             if cancel_event and cancel_event.is_set():
                 logging.info(f"Splitting cancelled at part {i+1}")
                 break
 
-            output_file = f"{base_name}_part{str(i+1).zfill(3)}{ext}"  # Zero-padded for better sorting
+            output_file = f"{base_name}_part{str(i+1).zfill(3)}{ext}"
 
             # Update progress callback if provided
             if progress_cb:
@@ -826,33 +789,27 @@ class MPDLeechBot:
                 except Exception as e:
                     logging.warning(f"Progress callback error: {e}")
 
-            # Use size-based splitting with FFmpeg segment feature for better accuracy
+            # Calculate byte range for this chunk
+            start_byte = i * target_size_per_chunk
             if i == num_chunks - 1:
-                # Last chunk - get everything remaining
-                cmd = [
-                    'ffmpeg', '-i', input_file,
-                    '-ss', str(current_time),
-                    '-c', 'copy',
-                    '-avoid_negative_ts', 'make_zero',
-                    '-map_metadata', '0',
-                    '-movflags', '+faststart',
-                    output_file, '-y'
-                ]
+                # Last chunk gets everything remaining to avoid rounding issues
+                chunk_size_bytes = file_size - start_byte
             else:
-                # Calculate duration to get approximately the target size
-                # We'll use the calculated chunk_duration but may need to adjust
-                cmd = [
-                    'ffmpeg', '-i', input_file,
-                    '-ss', str(current_time),
-                    '-t', str(chunk_duration),
-                    '-c', 'copy',
-                    '-avoid_negative_ts', 'make_zero',
-                    '-map_metadata', '0',
-                    '-movflags', '+faststart',
-                    output_file, '-y'
-                ]
+                chunk_size_bytes = target_size_per_chunk
 
-            logging.info(f"Splitting part {i+1}/{num_chunks}: {' '.join(cmd[:8])}...")
+            # Use ffmpeg to split by byte range
+            cmd = [
+                'ffmpeg', '-i', input_file,
+                '-ss', '0',  # Start from beginning
+                '-fs', str(chunk_size_bytes),  # File size limit
+                '-c', 'copy',
+                '-avoid_negative_ts', 'make_zero',
+                '-map_metadata', '0',
+                '-movflags', '+faststart',
+                output_file, '-y'
+            ]
+
+            logging.info(f"Splitting part {i+1}/{num_chunks} (size: {format_size(chunk_size_bytes)}): creating chunk...")
 
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -874,17 +831,6 @@ class MPDLeechBot:
                     if part_size > 0:
                         chunks.append(output_file)
                         logging.info(f"✅ Part {i+1}/{num_chunks}: {os.path.basename(output_file)} ({format_size(part_size)})")
-                        
-                        # If this part is larger than max_size, we need to adjust
-                        if part_size > max_size and i < num_chunks - 1:
-                            logging.warning(f"Part {i+1} size ({format_size(part_size)}) exceeds limit, adjusting duration for next parts")
-                            # Reduce chunk duration for remaining parts
-                            remaining_duration = duration - current_time - chunk_duration if duration > 0 else chunk_duration * (num_chunks - i - 1)
-                            remaining_parts = num_chunks - i - 1
-                            if remaining_parts > 0:
-                                chunk_duration = min(chunk_duration * 0.8, remaining_duration / remaining_parts)  # Reduce by 20%
-                        
-                        current_time += chunk_duration
                     else:
                         logging.error(f"❌ Part {i+1}/{num_chunks}: Empty file created")
                         if os.path.exists(output_file):
@@ -902,15 +848,28 @@ class MPDLeechBot:
         if len(chunks) < num_chunks:
             logging.warning(f"Created {len(chunks)} chunks out of expected {num_chunks}")
 
-        # Verify all chunks are within size limit
-        oversized_chunks = [(i, chunk) for i, chunk in enumerate(chunks) if os.path.getsize(chunk) > max_size]
-        if oversized_chunks:
-            logging.warning(f"Found {len(oversized_chunks)} oversized chunks, may need further splitting")
+        # Check for oversized chunks and split them further if needed
+        final_chunks = []
+        for i, chunk in enumerate(chunks):
+            chunk_size = os.path.getsize(chunk)
+            if chunk_size > max_size:
+                logging.warning(f"Chunk {i+1} ({format_size(chunk_size)}) still exceeds limit, attempting further split")
+                try:
+                    # Recursively split oversized chunk
+                    sub_chunks = await self.split_file(chunk, max_size_mb, progress_cb, cancel_event)
+                    final_chunks.extend(sub_chunks)
+                    # Remove original oversized chunk
+                    os.remove(chunk)
+                except Exception as e:
+                    logging.error(f"Failed to split oversized chunk: {e}")
+                    final_chunks.append(chunk)  # Keep original if split fails
+            else:
+                final_chunks.append(chunk)
 
-        total_chunks_size = sum(os.path.getsize(chunk) for chunk in chunks)
-        logging.info(f"Splitting complete: {len(chunks)} parts, total size: {format_size(total_chunks_size)}")
-
-        return chunks
+        total_chunks_size = sum(os.path.getsize(chunk) for chunk in final_chunks)
+        logging.info(f"Splitting complete: {len(final_chunks)} parts, total size: {format_size(total_chunks_size)}")
+        
+        return final_chunks
 
     async def download_and_decrypt(self, event, mpd_url, key, name, sender):
         if self.is_downloading:
@@ -2914,32 +2873,28 @@ async def speed_handler(event):
         download_emoji = ""
 
         if download_speed is not None:
-            # Convert to different units for better readability
-            download_mbps = download_speed / (1024 * 1024)
-            download_kbps = download_speed / 1024
+            # Convert to Mbps (megabits per second)
+            download_mbps = (download_speed * 8) / (1024 * 1024)
+            download_MBps = download_speed / (1024 * 1024)  # MB/s for reference
 
-            # Determine best unit to display for download
-            if download_mbps >= 1:
-                download_primary = f"{download_mbps:.2f} MB/s"
-                download_secondary = f"({download_kbps:.0f} KB/s)"
-            else:
-                download_primary = f"{download_kbps:.2f} KB/s"
-                download_secondary = f"({download_speed:.0f} B/s)"
+            # Primary display in Mbps, secondary in MB/s
+            download_primary = f"{download_mbps:.1f} Mbps"
+            download_secondary = f"({download_MBps:.1f} MB/s)"
 
-            # Create download speed rating
-            if download_mbps >= 50:
+            # Create download speed rating based on Mbps
+            if download_mbps >= 400:  # 50 MB/s = 400 Mbps
                 download_rating = "🚀 Excellent"
                 download_emoji = "🟢"
-            elif download_mbps >= 25:
+            elif download_mbps >= 200:  # 25 MB/s = 200 Mbps
                 download_rating = "⚡ Very Good"
                 download_emoji = "🟢"
-            elif download_mbps >= 10:
+            elif download_mbps >= 80:   # 10 MB/s = 80 Mbps
                 download_rating = "✅ Good"
                 download_emoji = "🟡"
-            elif download_mbps >= 5:
+            elif download_mbps >= 40:   # 5 MB/s = 40 Mbps
                 download_rating = "📶 Average"
                 download_emoji = "🟡"
-            elif download_mbps >= 1:
+            elif download_mbps >= 8:    # 1 MB/s = 8 Mbps
                 download_rating = "🐌 Slow"
                 download_emoji = "🟠"
             else:
@@ -2954,32 +2909,28 @@ async def speed_handler(event):
         upload_message = ""
 
         if upload_speed is not None:
-            # Convert to different units for better readability
-            upload_mbps = upload_speed / (1024 * 1024)
-            upload_kbps = upload_speed / 1024
+            # Convert to Mbps (megabits per second)
+            upload_mbps = (upload_speed * 8) / (1024 * 1024)
+            upload_MBps = upload_speed / (1024 * 1024)  # MB/s for reference
 
-            # Determine best unit to display for upload
-            if upload_mbps >= 1:
-                upload_primary = f"{upload_mbps:.2f} MB/s"
-                upload_secondary = f"({upload_kbps:.0f} KB/s)"
-            else:
-                upload_primary = f"{upload_kbps:.2f} KB/s"
-                upload_secondary = f"({upload_speed:.0f} B/s)"
+            # Primary display in Mbps, secondary in MB/s
+            upload_primary = f"{upload_mbps:.1f} Mbps"
+            upload_secondary = f"({upload_MBps:.1f} MB/s)"
 
-            # Create upload speed rating
-            if upload_mbps >= 25:
+            # Create upload speed rating based on Mbps
+            if upload_mbps >= 200:  # 25 MB/s = 200 Mbps
                 upload_rating = "🚀 Excellent"
                 upload_emoji = "🟢"
-            elif upload_mbps >= 10:
+            elif upload_mbps >= 80:   # 10 MB/s = 80 Mbps
                 upload_rating = "⚡ Very Good"
                 upload_emoji = "🟢"
-            elif upload_mbps >= 5:
+            elif upload_mbps >= 40:   # 5 MB/s = 40 Mbps
                 upload_rating = "✅ Good"
                 upload_emoji = "🟡"
-            elif upload_mbps >= 2:
+            elif upload_mbps >= 16:   # 2 MB/s = 16 Mbps
                 upload_rating = "📶 Average"
                 upload_emoji = "🟡"
-            elif upload_mbps >= 0.5:
+            elif upload_mbps >= 4:    # 0.5 MB/s = 4 Mbps
                 upload_rating = "🐌 Slow"
                 upload_emoji = "🟠"
             else:
@@ -3039,10 +2990,19 @@ async def speed_handler(event):
                     speed_type = f"🔄 {stage}"
                     speed_emoji = "⚡"
 
+                # Convert speed to Mbps for display
+                current_speed_mbps = (current_speed * 8) / (1024 * 1024) if current_speed > 0 else 0
+                if current_speed_mbps >= 1:
+                    current_speed_display = f"{current_speed_mbps:.1f} Mbps"
+                else:
+                    # Show in KB/s for very slow speeds
+                    current_speed_kbps = current_speed / 1024 if current_speed > 0 else 0
+                    current_speed_display = f"{current_speed_kbps:.1f} KB/s"
+
                 speed_message += (
                     f"\n\n📊 **Current Task** 📊\n"
                     f"📄 {filename}\n"
-                    f"{speed_emoji} **{speed_type}:** {format_size(current_speed)}/s\n"
+                    f"{speed_emoji} **{speed_type}:** {current_speed_display}\n"
                     f"📈 **Progress:** {percent:.1f}%\n"
                     f"📦 {format_size(done)} / {format_size(total)}\n"
                     f"⏱️ {format_time(elapsed)}"
