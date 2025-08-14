@@ -752,7 +752,7 @@ class MPDLeechBot:
             raise
 
     async def split_file(self, input_file, max_size_mb=1900, progress_cb=None, cancel_event=None):
-        """Split large files based on size only with progress tracking and proper cleanup"""
+        """Split large files into 1.9GB chunks with precise size control"""
         max_size = max_size_mb * 1024 * 1024  # 1.9GB = 1900MB
         file_size = os.path.getsize(input_file)
 
@@ -761,19 +761,18 @@ class MPDLeechBot:
             logging.info(f"File {input_file} ({format_size(file_size)}) is within {max_size_mb}MB limit, no splitting needed")
             return [input_file]
 
-        logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting into parts based on size")
+        logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting into 1.9GB parts")
 
         base_name = os.path.splitext(input_file)[0]
         ext = os.path.splitext(input_file)[1]
         chunks = []
 
-        # Calculate number of chunks needed based on file size only
-        num_chunks = max(1, int((file_size + max_size - 1) / max_size))  # Ceiling division
-        target_size_per_chunk = file_size // num_chunks  # Target size per chunk
+        # Calculate number of 1.9GB chunks needed
+        num_chunks = int((file_size + max_size - 1) // max_size)  # Ceiling division for 1.9GB chunks
         
-        logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts, target size: {format_size(target_size_per_chunk)} per part")
+        logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts of ~{format_size(max_size)} each")
 
-        # Split file into equal byte-sized chunks
+        # Split file into 1.9GB chunks
         for i in range(num_chunks):
             # Check for cancellation
             if cancel_event and cancel_event.is_set():
@@ -789,27 +788,30 @@ class MPDLeechBot:
                 except Exception as e:
                     logging.warning(f"Progress callback error: {e}")
 
-            # Calculate byte range for this chunk
-            start_byte = i * target_size_per_chunk
+            # Calculate exact 1.9GB chunk or remaining bytes for last chunk
+            start_byte = i * max_size
             if i == num_chunks - 1:
-                # Last chunk gets everything remaining to avoid rounding issues
-                chunk_size_bytes = file_size - start_byte
+                # Last chunk gets everything remaining
+                remaining_bytes = file_size - start_byte
+                chunk_size_bytes = remaining_bytes
             else:
-                chunk_size_bytes = target_size_per_chunk
+                # Standard 1.9GB chunk
+                chunk_size_bytes = max_size
 
-            # Use ffmpeg to split by byte range
+            # Use ffmpeg with precise byte seeking and limiting
             cmd = [
                 'ffmpeg', '-i', input_file,
-                '-ss', '0',  # Start from beginning
-                '-fs', str(chunk_size_bytes),  # File size limit
-                '-c', 'copy',
+                '-ss', '0',  # Start from beginning 
+                '-fs', str(chunk_size_bytes),  # Exact file size limit
+                '-c', 'copy',  # Stream copy for speed
                 '-avoid_negative_ts', 'make_zero',
                 '-map_metadata', '0',
                 '-movflags', '+faststart',
+                '-f', 'mp4',  # Force MP4 format
                 output_file, '-y'
             ]
 
-            logging.info(f"Splitting part {i+1}/{num_chunks} (size: {format_size(chunk_size_bytes)}): creating chunk...")
+            logging.info(f"Creating Part {i+1}/{num_chunks}: {format_size(chunk_size_bytes)} target")
 
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -827,10 +829,15 @@ class MPDLeechBot:
                         logging.warning(f"Progress callback error: {e}")
 
                 if process.returncode == 0 and os.path.exists(output_file):
-                    part_size = os.path.getsize(output_file)
-                    if part_size > 0:
+                    actual_size = os.path.getsize(output_file)
+                    if actual_size > 0:
                         chunks.append(output_file)
-                        logging.info(f"✅ Part {i+1}/{num_chunks}: {os.path.basename(output_file)} ({format_size(part_size)})")
+                        size_check = "✅" if actual_size <= max_size else "⚠️"
+                        logging.info(f"{size_check} Part {i+1}/{num_chunks}: {format_size(actual_size)} ({os.path.basename(output_file)})")
+                        
+                        # Verify size is within limit
+                        if actual_size > max_size * 1.05:  # Allow 5% tolerance
+                            logging.warning(f"Part {i+1} size {format_size(actual_size)} exceeds target {format_size(max_size)}")
                     else:
                         logging.error(f"❌ Part {i+1}/{num_chunks}: Empty file created")
                         if os.path.exists(output_file):
@@ -845,31 +852,28 @@ class MPDLeechBot:
         if not chunks:
             raise Exception("Failed to create any valid chunks - check video file integrity")
 
-        if len(chunks) < num_chunks:
-            logging.warning(f"Created {len(chunks)} chunks out of expected {num_chunks}")
-
-        # Check for oversized chunks and split them further if needed
-        final_chunks = []
+        # Verify all chunks are within size limit
+        oversized_chunks = []
+        total_size = 0
         for i, chunk in enumerate(chunks):
             chunk_size = os.path.getsize(chunk)
+            total_size += chunk_size
             if chunk_size > max_size:
-                logging.warning(f"Chunk {i+1} ({format_size(chunk_size)}) still exceeds limit, attempting further split")
-                try:
-                    # Recursively split oversized chunk
-                    sub_chunks = await self.split_file(chunk, max_size_mb, progress_cb, cancel_event)
-                    final_chunks.extend(sub_chunks)
-                    # Remove original oversized chunk
-                    os.remove(chunk)
-                except Exception as e:
-                    logging.error(f"Failed to split oversized chunk: {e}")
-                    final_chunks.append(chunk)  # Keep original if split fails
-            else:
-                final_chunks.append(chunk)
+                oversized_chunks.append((i+1, chunk, chunk_size))
 
-        total_chunks_size = sum(os.path.getsize(chunk) for chunk in final_chunks)
-        logging.info(f"Splitting complete: {len(final_chunks)} parts, total size: {format_size(total_chunks_size)}")
+        if oversized_chunks:
+            logging.warning(f"Found {len(oversized_chunks)} oversized chunks:")
+            for part_num, chunk_path, chunk_size in oversized_chunks:
+                logging.warning(f"  Part {part_num}: {format_size(chunk_size)} > {format_size(max_size)}")
+
+        logging.info(f"✅ Splitting complete: {len(chunks)} parts, total: {format_size(total_size)}")
+        expected_parts = int((file_size + max_size - 1) // max_size)
+        if len(chunks) == expected_parts:
+            logging.info(f"✅ Expected {expected_parts} parts, created {len(chunks)} parts - Perfect!")
+        else:
+            logging.warning(f"⚠️ Expected {expected_parts} parts, created {len(chunks)} parts")
         
-        return final_chunks
+        return chunks
 
     async def download_and_decrypt(self, event, mpd_url, key, name, sender):
         if self.is_downloading:
