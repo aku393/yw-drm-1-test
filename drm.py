@@ -761,18 +761,28 @@ class MPDLeechBot:
             logging.info(f"File {input_file} ({format_size(file_size)}) is within {max_size_mb}MB limit, no splitting needed")
             return [input_file]
 
-        chunk_size_gb = max_size_mb / 1024  # Convert to GB for display
-        logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting into {chunk_size_gb}GB parts")
+        # Ensure we don't exceed Telegram's 4000 parts limit
+        part_size = 524288  # 512KB
+        max_parts = 4000
+        telegram_absolute_max = part_size * max_parts  # ~2GB
+
+        # Use the smaller of requested max_size or Telegram's absolute limit
+        effective_max_size = min(max_size, telegram_absolute_max)
+        
+        # Apply a smaller safety margin to avoid parts limit issues
+        safe_max_size = int(effective_max_size * 0.98)  # 2% smaller for safety
+        
+        chunk_size_gb = safe_max_size / (1024 * 1024 * 1024)  # Convert to GB for display
+        logging.info(f"File {input_file} ({format_size(file_size)}) exceeds {max_size_mb}MB limit, splitting into {chunk_size_gb:.1f}GB parts (Telegram safe)")
 
         base_name = os.path.splitext(input_file)[0]
         ext = os.path.splitext(input_file)[1]
         chunks = []
 
-        # Calculate number of chunks needed with 5% safety margin
-        safe_max_size = int(max_size * 0.95)  # 5% smaller to ensure compliance
+        # Calculate number of chunks needed
         num_chunks = int((file_size + safe_max_size - 1) // safe_max_size)  # Ceiling division
 
-        logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts of ~{format_size(safe_max_size)} each (with safety margin)")
+        logging.info(f"Splitting {format_size(file_size)} file into {num_chunks} parts of ~{format_size(safe_max_size)} each (Telegram compliant)")
 
         # Split file into properly sized chunks
         for i in range(num_chunks):
@@ -1322,27 +1332,31 @@ class MPDLeechBot:
             self.progress_state['speed'] = 0
             self.progress_state['elapsed'] = 0
 
-            # Set size limits based on user type or admin premium availability
-            if is_premium or use_admin_premium:
-                max_size_mb = 3900  # 3.9GB for premium users/admin premium (just under 4GB limit)
-                max_size_bytes = 3900 * 1024 * 1024
-                single_file_limit = 4 * 1024 * 1024 * 1024  # 4GB single file limit for premium
-            else:
-                max_size_mb = 1900  # 1.9GB for free users
-                max_size_bytes = 1900 * 1024 * 1024
-                single_file_limit = 2 * 1024 * 1024 * 1024  # 2GB single file limit for free users
+            # Calculate max file size based on Telegram's 4000 parts limit and 512KB part size
+            part_size = 524288  # 512KB
+            max_parts = 4000
+            telegram_max_file_size = part_size * max_parts  # ~2GB absolute limit
 
+            # Set size limits based on user type but respect Telegram's limits
+            if is_premium or use_admin_premium:
+                max_size_bytes = min(3900 * 1024 * 1024, telegram_max_file_size)  # 3.9GB or Telegram limit
+                single_file_limit = min(4 * 1024 * 1024 * 1024, telegram_max_file_size)  # 4GB or Telegram limit
+            else:
+                max_size_bytes = min(1900 * 1024 * 1024, telegram_max_file_size)  # 1.9GB or Telegram limit
+                single_file_limit = min(2 * 1024 * 1024 * 1024, telegram_max_file_size)  # 2GB or Telegram limit
+
+            max_size_mb = max_size_bytes // (1024 * 1024)
             user_type = "PREMIUM" if (is_premium or use_admin_premium) else "FREE"
 
-            logging.info(f"User {sender.id} is {user_type}, max chunk size: {format_size(max_size_bytes)}")
+            logging.info(f"User {sender.id} is {user_type}, max chunk size: {format_size(max_size_bytes)} (Telegram limit: {format_size(telegram_max_file_size)})")
 
             # Check if file needs to be split based on user type or admin premium
             needs_splitting = False
             if is_premium or use_admin_premium:
-                # Premium users or admin premium: split only if file > 3.9GB
+                # Premium users or admin premium: split only if file > max allowed
                 needs_splitting = file_size > max_size_bytes
             else:
-                # Free users without admin premium: split if file > 2GB
+                # Free users without admin premium: split if file > max allowed
                 needs_splitting = file_size > single_file_limit
 
             if needs_splitting:
@@ -1474,7 +1488,24 @@ class MPDLeechBot:
                         if total_parts <= 0:
                             raise ValueError(f"Invalid total_parts for chunk {i+1}: {total_parts}")
                         if total_parts > 4000:  # Telegram's maximum parts limit
-                            raise ValueError(f"Too many parts for chunk {i+1}: {total_parts} (max 4000)")
+                            # Try to re-split this chunk into smaller pieces
+                            logging.warning(f"Chunk {i+1} would need {total_parts} parts (max 4000), re-splitting...")
+                            smaller_max_mb = (4000 * part_size) // (1024 * 1024) - 10  # 10MB safety margin
+                            smaller_chunks = await self.split_file(
+                                chunk,
+                                max_size_mb=smaller_max_mb,
+                                progress_cb=None,
+                                cancel_event=self.abort_event
+                            )
+                            # Remove original oversized chunk and add smaller ones
+                            try:
+                                os.remove(chunk)
+                            except:
+                                pass
+                            chunks = chunks[:i] + smaller_chunks + chunks[i+1:]
+                            total_chunks = len(chunks)
+                            logging.info(f"Re-split chunk {i+1} into {len(smaller_chunks)} smaller parts")
+                            continue  # Skip to next iteration with new chunk list
                         if chunk_size == 0:
                             raise ValueError(f"Empty chunk {i+1}")
 
